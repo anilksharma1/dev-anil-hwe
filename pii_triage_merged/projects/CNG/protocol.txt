@@ -1,0 +1,356 @@
+ 
+ 
+PRIVILEGED AND CONFIDENTIAL 
+ATTORNEY WORK PRODUCT 
+ 
+ 
+Cyber Incident Response 
+Document Review Protocol 
+ 
+ 
+ 
+
+Cognicion Cyber Incident Response PI Review Protocol     
+ 
+PRIVILEGED AND CONFIDENTIAL 
+ATTORNEY WORK PRODUCT 
+ 
+ 
+1 
+Introduction 
+ 
+The purpose of this review is to capture personal information (PI) contained in the relevant records to 
+generate reporting in compliance with the notice obligations for each jurisdiction .  The data has been 
+pre-searched for terms that are indicative of PI relevant to notice obligations.  Reviewers will manually 
+scan the document, utilizing the search hit information for each document, to determine if relevant PI is 
+included in the record.  If included, the reviewer will log the information about the individual whose PI is 
+contained in the record and the type of sensitive PI based on the protocol below. 
+ 
+Jurisdictional Considerations 
+ 
+The review team needs to consider whether the document contains US or non-US data.   
+ 
+If the document contains non-US data, the review team should capture any Data Subject information if 
+the document contains at least one (1) of the PI types listed below.   
+ 
+However, US-based Data Subjects should only be captured if (1) a name is present, in combination with 
+one of the PI types listed below or (2) in the case of email address, if the email address is in combination 
+with a password or security question and answer.   
+ 
+If it is unclear whether the relevant data subject is US-based or non -US-based, capture all of the 
+information described in the protocol below, regardless of whether a name is present  (i.e., treat the 
+individual as a non-US data subject for purposes of completing the review).  
+ 
+For non-US data, in the absence of a Data Subject’s first or last names, please capture the name(s) as 
+“[Unknown]” and enter any relevant identifying information such as Government -Issued Identification 
+Number and issuing country, Date of Birth, Residential Address, etc. 
+ 
+For US data, in the absence of a Data Subject’s name, capture as “[Unknown]” only if SSN, Tax ID, or 
+Other Government ID is present. 
+ 
+Relevant PI Types for Data Capture 
+ 
+A. Government-Issued Identification (e.g., Known Traveler Numbers (KTN) or Global Entry 
+Numbers, Social Insurance number, National Insurance Number, etc.). Please include if there 
+is any of the following: (1) a photocopy or image of a government-issued ID card (e.g., Social 
+Security card, passport, driver’s license, etc.), (2) a full unredacted government-issued ID 
+number (e.g., full Social Security number), or (3) a partial government-issued ID number (i.e., 
+with 5 or more digits available). 
+i. Social Security Number (SSN) 
+ii. Passport number  
+iii. Driver’s license number 
+iv. Taxpayer Identification Number (TIN) 
+v. National ID/National Insurance Number 
+Cognicion Cyber Incident Response PI Review Protocol     
+ 
+PRIVILEGED AND CONFIDENTIAL 
+ATTORNEY WORK PRODUCT 
+ 
+ 
+2 
+vi. Alien Registration Number 
+vii. Military ID Number 
+viii. Tribal ID Number 
+ix. Other government -issued identification number –  Please specify in the 
+Comments/Notes field 
+x. Copy of government-issued ID 
+B. Birth Information 
+i. Full Date of Birth (i.e., month, day, and year) 
+ii. Copy of Birth Certificate 
+C. Contact Information 
+i. Personal phone number (home) 
+ii. Personal phone number (mobile) 
+iii. Personal email address 
+iv. Home address 
+D. Financial Account Information 
+i. Transactional information 
+ii. Financial account number 
+1. Full credit or debit card number  
+2. Full bank account number 
+3. Loan number 
+4. Other – please specify in the Comments/Notes field  
+iii. Bank account balance 
+iv. Payment (credit or debit) card expiration date 
+v. Payment (credit or debit) card security code 
+vi. Financial Account access credentials 
+1. Username or Email w/ Password or Security Answer that would permit access 
+to an online account (only mark responsive if a password or security answer is 
+included, and do not include temporary passwords such as one -time login 
+codes) 
+a. Please specify the type of account in the Comments/Notes field (if 
+known) 
+2. Security Question & Answer 
+3. PIN (not including temporary passwords such as one-time login codes) 
+E. Access Credentials (Non-Financial Account) 
+i. Username or Email w/ Password or Security Answer that would permit access to an 
+online account (only mark responsive if a password or security answer is included) 
+1. Please specify the type of account in the Comments/Notes field (if known) 
+ii. Security Answer 
+iii. PIN 
+F. Health-Related Information 
+i. Medical history 
+ii. Mental or physical condition 
+iii. Medical treatment or diagnosis 
+iv. Health Insurance Information 
+Cognicion Cyber Incident Response PI Review Protocol     
+ 
+PRIVILEGED AND CONFIDENTIAL 
+ATTORNEY WORK PRODUCT 
+ 
+ 
+3 
+1. Insurance policy number 
+2. Subscriber identification number 
+3. Other unique identifier used by insurance company to identify the individual  
+4. Application information 
+5. Information related to health insurance transactions  
+6. Claims information or history 
+7. Appeals records 
+8. Other – Please specify in the Comments/Notes field 
+v. Other – Please specify in the Comments/Notes field 
+G. Biometric Data  
+i. Fingerprint 
+ii. Voice Print 
+iii. Genetic Print 
+iv. Retina/ Iris Image 
+v. DNA Profiles 
+vi. Other – Please specify in the Comments/ Notes field 
+H. Family Information 
+i. Mother’s Maiden Name 
+ii. Copy of Marriage Certificate 
+I. Demographic Information 
+i. Race/ Ethnicity 
+ii. Sexual Orientation 
+iii. Religion / Philosophical Beliefs 
+iv. Criminal Convictions and Offenses 
+v. Trade Union Membership 
+vi. Other – Please specify in the Comments/Notes field 
+J. Student-Related Information 
+i. Student Identification Number 
+K. Work-Related Information 
+i. Employee Identification Number 
+ii. Salary or Compensation Information 
+iii. Work-Related Evaluation 
+iv. Disciplinary Record or Report 
+v. Worker’s Compensation Claims Information 
+vi. Employment Application Information 
+ 
+ 
+ 
+ 
+ 
+ 
+Cognicion Cyber Incident Response PI Review Protocol     
+ 
+PRIVILEGED AND CONFIDENTIAL 
+ATTORNEY WORK PRODUCT 
+ 
+ 
+4 
+Other Review Considerations 
+If applicable, p lease classify the Data Subject based on client relationship  (Employee or Employee – 
+Family Member). If the client relationship is not clear, please leave this field blank. 
+ 
+ 
+ 
+Review Layout 
+ 
+Reviewers will be using the Data Entry coding layout to capture relevant Data Subject information. 
+ 
+ 
+ 
+Review Fields 
+ 
+If the document does not contain any notifiable PI regarding a Data Subject, is in a Foreign Language with 
+non-roman characters, or the document is illegible due to poor image quality, please select the 
+applicable choice and move onto the next document.   
+ 
+Please select Further Review –  51+ Entities if your document contains more than 50 entities, as these 
+documents will be extracted using an alternate workflow.   
+ 
+ 
+ 
+Data Capture 
+ 
+Creating Data Subjects 
+If the document contains PI, please create a data subject profile by  selecting “New” and entering the 
+Relevant Information regarding this individual.   
+ 
+
+Cognicion Cyber Incident Response PI Review Protocol     
+ 
+PRIVILEGED AND CONFIDENTIAL 
+ATTORNEY WORK PRODUCT 
+ 
+ 
+5 
+ 
+ 
+Data Capture Fields 
+We have created the following fields to capture any relevant Data Subject information: 
+• Text fields: 
+o Data Subject Information 
+ Name fields: 
+• Last Name 
+• First Name 
+• Middle Name 
+• Suffix 
+ 
+Note: for non-US data, if no name is available, please capture the Data Subject Name as 
+“[Unknown]" in both the First Name and Last Name fields. 
+ 
+ Additional fields captured for deduplication purposes: 
+• Birth Information 
+o Date of Birth (MM/DD/YYYY) 
+ 
+• Government-Issued Identification 
+o SSN (000-00-0000) 
+o Tax Identification Number 
+o Passport Number 
+o Passport Country 
+o Driver’s License Number 
+o Driver’s License Issuing Authority 
+ DL Issuing Country 
+ DL Issuing Province (if Canada) 
+ DL Issuing State (if US) 
+o Government ID Number 
+o Government ID Country 
+ 
+ 
+
+Cognicion Cyber Incident Response PI Review Protocol     
+ 
+PRIVILEGED AND CONFIDENTIAL 
+ATTORNEY WORK PRODUCT 
+ 
+ 
+6 
+• Work-Related Information 
+o Employee Identification Number 
+  
+ 
+o Contact Information 
+ Residential Address 
+ City 
+ State of Residence (if US) 
+ Province of Residence (if Canada) 
+ Country of Residence 
+ Zip Code 
+ Phone Number 
+ Email Address – Personal 
+ 
+ 
+ 
+• Choice Fields: 
+o For all applicable PI categories, please select the specific elements that were impacted 
+for each data subject 
+ 
+ 
+ 
+o PI Elements 
+ PI Type  
+• Contact Information 
+• Government-Issued Identification 
+• Birth Information 
+• Health-Related Information 
+• Financial Account Information 
+• Access Credentials (Non-Financial Account) 
+• Biometric Data 
+• Demographic Information 
+• Family Information 
+• Student-Related Information 
+
+Cognicion Cyber Incident Response PI Review Protocol     
+ 
+PRIVILEGED AND CONFIDENTIAL 
+ATTORNEY WORK PRODUCT 
+ 
+ 
+7 
+• Work-Related Information 
+ PI Notes 
+ 
+o Contact Information 
+ 
+ 
+o Government-Issued Identification 
+ 
+ 
+ 
+o Birth & Health Information 
+ 
+
+Cognicion Cyber Incident Response PI Review Protocol     
+ 
+PRIVILEGED AND CONFIDENTIAL 
+ATTORNEY WORK PRODUCT 
+ 
+ 
+8 
+ 
+ 
+o Financial Account & Access Information 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+
+Cognicion Cyber Incident Response PI Review Protocol     
+ 
+PRIVILEGED AND CONFIDENTIAL 
+ATTORNEY WORK PRODUCT 
+ 
+ 
+9 
+ 
+ 
+o Demographic, Family & Work Information 
+ 
+ 
+Editing Data Subjects 
+To edit information about a Data Subject, select the pencil icon next to the individual’s name.  A pop-up 
+window will appear with all Data Subject Information fields. 
+ 
+ 
+ 
+ 
+Unlinking Data Subjects 
+To unlink a Data Subject, select the box next to the individual’s name and select the “Unlink” button. 
+ 
+ 

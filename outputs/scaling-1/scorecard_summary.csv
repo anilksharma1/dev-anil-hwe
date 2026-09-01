@@ -1,0 +1,141 @@
+﻿section,metric,value
+run,inventory,C:\Users\DanielZhang\New-HWE\outputs\inventory_scaling1.csv
+run,files_in_inventory,2000
+run,scored,1514
+run,absent_means,unreviewed
+run,bde_threshold,6
+cost,di_calls,632
+cost,di_pages,1904
+cost,full_file_calls,335
+cost,embedded_calls,297
+cost,embedded_qualifying,297
+cost,embedded_ok,251
+cost,image_decode_failed,0
+cost,tokens_stage1,14380535
+cost,tokens_stage2,6490154
+cost,tokens_total,20870689
+cost,di_cost,19.04
+cost,llm_cost_low,2087.0688999999998
+cost,llm_cost_high,8348.275599999999
+cost,stage1_survivors,1002
+cost,di_calls_second_pass_would_repeat,400
+nr_r:stage1_all,N,1492
+nr_r:stage1_all,TP,394
+nr_r:stage1_all,FP,444
+nr_r:stage1_all,FN,52
+nr_r:stage1_all,TN,602
+nr_r:stage1_all,undetermined,22
+nr_r:stage1_all,recall,0.8834
+nr_r:stage1_all,precision,0.4702
+nr_r:stage1_all,accuracy,0.6676
+nr_r:stage1_all,f1,0.6137
+nr_r:stage1_all,nr_accuracy,0.0795
+nr_r:stage1_all,r_accuracy,0.5298
+nr_r:stage1_all,over_call,0.2976
+nr_r:stage1_all,under_call,0.1166
+nr_r:stage1_all,flagged_pct,0.5617
+nr_r:stage2_graded,N,842
+nr_r:stage2_graded,TP,343
+nr_r:stage2_graded,FP,124
+nr_r:stage2_graded,FN,52
+nr_r:stage2_graded,TN,323
+nr_r:stage2_graded,undetermined,0
+nr_r:stage2_graded,recall,0.8684
+nr_r:stage2_graded,precision,0.7345
+nr_r:stage2_graded,accuracy,0.791
+nr_r:stage2_graded,f1,0.7958
+nr_r:stage2_graded,nr_accuracy,0.1387
+nr_r:stage2_graded,r_accuracy,0.2655
+nr_r:stage2_graded,over_call,0.1473
+nr_r:stage2_graded,under_call,0.1316
+nr_r:stage2_graded,flagged_pct,0.5546
+nr_r:stage1_on_stage2_pop,N,838
+nr_r:stage1_on_stage2_pop,TP,394
+nr_r:stage1_on_stage2_pop,FP,444
+nr_r:stage1_on_stage2_pop,FN,0
+nr_r:stage1_on_stage2_pop,TN,0
+nr_r:stage1_on_stage2_pop,undetermined,4
+nr_r:stage1_on_stage2_pop,recall,1.0
+nr_r:stage1_on_stage2_pop,precision,0.4702
+nr_r:stage1_on_stage2_pop,accuracy,0.4702
+nr_r:stage1_on_stage2_pop,f1,0.6396
+nr_r:stage1_on_stage2_pop,nr_accuracy,0.0
+nr_r:stage1_on_stage2_pop,r_accuracy,0.5298
+nr_r:stage1_on_stage2_pop,over_call,0.5298
+nr_r:stage1_on_stage2_pop,under_call,0.0
+nr_r:stage1_on_stage2_pop,flagged_pct,1.0
+nr_r:pipeline,N,1492
+nr_r:pipeline,TP,342
+nr_r:pipeline,FP,124
+nr_r:pipeline,FN,104
+nr_r:pipeline,TN,922
+nr_r:pipeline,undetermined,22
+nr_r:pipeline,recall,0.7668
+nr_r:pipeline,precision,0.7339
+nr_r:pipeline,accuracy,0.8472
+nr_r:pipeline,f1,0.75
+nr_r:pipeline,nr_accuracy,0.1014
+nr_r:pipeline,r_accuracy,0.2661
+nr_r:pipeline,over_call,0.0831
+nr_r:pipeline,under_call,0.2332
+nr_r:pipeline,flagged_pct,0.3123
+nr_r:union,N,1496
+nr_r:union,TP,395
+nr_r:union,FP,444
+nr_r:union,FN,52
+nr_r:union,TN,605
+nr_r:union,undetermined,18
+nr_r:union,recall,0.8837
+nr_r:union,precision,0.4708
+nr_r:union,accuracy,0.6684
+nr_r:union,f1,0.6143
+nr_r:union,nr_accuracy,0.0791
+nr_r:union,r_accuracy,0.5292
+nr_r:union,over_call,0.2968
+nr_r:union,under_call,0.1163
+nr_r:union,flagged_pct,0.5608
+bde:is_bde flag (column),N,1514
+bde:is_bde flag (column),TP,94
+bde:is_bde flag (column),FP,35
+bde:is_bde flag (column),FN,64
+bde:is_bde flag (column),TN,1321
+bde:is_bde flag (column),recall,0.5949
+bde:is_bde flag (column),precision,0.7287
+bde:is_bde flag (column),accuracy,0.9346
+bde:is_bde flag (column),f1,0.6551
+bde:BDE lane (bde / structured_bde),N,1514
+bde:BDE lane (bde / structured_bde),TP,94
+bde:BDE lane (bde / structured_bde),FP,35
+bde:BDE lane (bde / structured_bde),FN,64
+bde:BDE lane (bde / structured_bde),TN,1321
+bde:BDE lane (bde / structured_bde),recall,0.5949
+bde:BDE lane (bde / structured_bde),precision,0.7287
+bde:BDE lane (bde / structured_bde),accuracy,0.9346
+bde:BDE lane (bde / structured_bde),f1,0.6551
+bde:effective count > 6,N,1514
+bde:effective count > 6,TP,132
+bde:effective count > 6,FP,301
+bde:effective count > 6,FN,26
+bde:effective count > 6,TN,1055
+bde:effective count > 6,recall,0.8354
+bde:effective count > 6,precision,0.3048
+bde:effective count > 6,accuracy,0.784
+bde:effective count > 6,f1,0.4467
+bde:lane OR bde_person_count > 6 (incl. recovery),N,1514
+bde:lane OR bde_person_count > 6 (incl. recovery),TP,134
+bde:lane OR bde_person_count > 6 (incl. recovery),FP,92
+bde:lane OR bde_person_count > 6 (incl. recovery),FN,24
+bde:lane OR bde_person_count > 6 (incl. recovery),TN,1264
+bde:lane OR bde_person_count > 6 (incl. recovery),recall,0.8481
+bde:lane OR bde_person_count > 6 (incl. recovery),precision,0.5929
+bde:lane OR bde_person_count > 6 (incl. recovery),accuracy,0.9234
+bde:lane OR bde_person_count > 6 (incl. recovery),f1,0.6979
+bde:stage 2 s2_is_bde,N,1514
+bde:stage 2 s2_is_bde,TP,92
+bde:stage 2 s2_is_bde,FP,78
+bde:stage 2 s2_is_bde,FN,66
+bde:stage 2 s2_is_bde,TN,1278
+bde:stage 2 s2_is_bde,recall,0.5823
+bde:stage 2 s2_is_bde,precision,0.5412
+bde:stage 2 s2_is_bde,accuracy,0.9049
+bde:stage 2 s2_is_bde,f1,0.561

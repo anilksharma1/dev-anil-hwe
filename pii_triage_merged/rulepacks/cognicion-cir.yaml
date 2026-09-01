@@ -1,0 +1,589 @@
+# Cognicion Cyber Incident Response Document Review Protocol
+# Rule pack for pii_triage. Each entity maps to exactly one leaf-level PI
+# subcategory from the protocol. Parent-category labels are never used as
+# standalone signals -- the tool flags only when a specific subcategory is
+# detected, and reviewers code the exact type during manual review.
+#
+# weak: true  (auto-set for keyword) = topic mention only; does NOT trigger
+#             value_signal alone; file goes to LLM on ambiguous files.
+# weak: false (auto-set for regex/labeled_value/ssn/name) = actual value
+#             detected; triggers value_signal; responsive without LLM.
+#
+# NAME is explicitly weak: true so a bare name does not auto-flag. The
+# value_signal() fallback implements the protocol's US rule -- a NAME found
+# alongside ANY other signal is still responsive.
+
+name: cognicion-cir
+version: '1.0'
+bde_threshold: 51
+bucket_edges:
+- 10
+- 20
+- 50
+- 100
+
+entities:
+
+# -- Name: not a standalone PI type; used for the US responsiveness rule
+#    (US requires name + PI type). Must be weak so a bare name does not flag.
+- key: NAME
+  label: Name
+  category: ''
+  method: name
+  per_person: true
+  weak: true
+
+
+# ============================================================
+# A. Government-Issued Identification
+# ============================================================
+
+# A.i — Social Security Number
+- key: SSN
+  label: SSN
+  category: Government-Issued Identification
+  method: ssn
+  per_person: true
+
+# A.ii — Passport number
+- key: PASSPORT
+  label: Passport Number
+  category: Government-Issued Identification
+  method: labeled_value
+  per_person: true
+  label_pattern: passport(?:\s*(?:no\.?|number|num|#))?
+  value_pattern: '[A-Za-z0-9][A-Za-z0-9-]{4,16}'
+  min_digits: 4
+  window: 30
+
+# A.iii — Driver's license number
+- key: DRIVER_LICENSE
+  label: Driver License Number
+  category: Government-Issued Identification
+  method: labeled_value
+  per_person: true
+  label_pattern: driver'?s?\s*licen[sc]e(?:\s*(?:no\.?|number|#))?|\bdl\s*(?:no\.?|number|#)
+  value_pattern: '[A-Za-z0-9][A-Za-z0-9-]{4,16}'
+  min_digits: 4
+  window: 30
+
+# A.iv — Taxpayer Identification Number (TIN / EIN)
+- key: TIN
+  label: Tax Identification Number
+  category: Government-Issued Identification
+  method: labeled_value
+  per_person: true
+  label_pattern: taxpayer\s*id(?:entification)?(?:\s*(?:no\.?|number))?|\btin\b|tax\s*id(?:entification)?(?:\s*(?:no\.?|number))?
+  value_pattern: \d{2}-?\d{7}|\d{9}
+  min_digits: 9
+  window: 25
+
+# A.v — National ID / National Insurance Number / Social Insurance Number
+- key: NATIONAL_ID
+  label: National/NI Number
+  category: Government-Issued Identification
+  method: labeled_value
+  per_person: true
+  label_pattern: national\s*(?:insurance|id)(?:\s*(?:no\.?|number|#))?|\bnino\b|social\s*insurance(?:\s*(?:no\.?|number))?
+  value_pattern: '[A-Z]{2}\d{6}[A-D]|[A-Za-z0-9-]{6,12}'
+  min_digits: 6
+  window: 25
+
+# A.vi — Alien Registration Number (A-Number)
+- key: ALIEN_REG
+  label: Alien Registration Number
+  category: Government-Issued Identification
+  method: labeled_value
+  per_person: true
+  label_pattern: alien\s*registration(?:\s*(?:no\.?|number))?|\ba[\-\s]?number\b|\buscis\s*(?:no\.?|number)?
+  value_pattern: 'A?\d{8,9}'
+  min_digits: 8
+  window: 25
+
+# A.vii — Military ID Number
+- key: MILITARY_ID
+  label: Military ID Number
+  category: Government-Issued Identification
+  method: labeled_value
+  per_person: true
+  label_pattern: military\s*id(?:\s*(?:no\.?|number))?|\bdod\s*id\b|service\s*(?:member\s*)?number
+  value_pattern: '[A-Za-z0-9]{6,12}'
+  min_digits: 6
+  window: 25
+
+# A.viii — Tribal ID Number
+- key: TRIBAL_ID
+  label: Tribal ID Number
+  category: Government-Issued Identification
+  method: labeled_value
+  per_person: true
+  label_pattern: tribal\s*id(?:\s*(?:no\.?|number))?|tribal\s*identification
+  value_pattern: '[A-Za-z0-9]{4,16}'
+  min_digits: 4
+  window: 25
+
+# A.ix — Other government-issued ID number (KTN, Global Entry, NEXUS, etc.)
+- key: OTHER_GOV_ID
+  label: Other Government ID
+  category: Government-Issued Identification
+  method: keyword
+  patterns:
+  - \b(?:known\s*traveler\s*(?:number|no\.?)?|global\s*entry(?:\s*(?:number|no\.?))?|\bktn\b|nexus\s*(?:number|no\.?)?|sentri\s*(?:number|no\.?)?)\b
+
+# A.x — Copy / image / photocopy of a government-issued ID card
+- key: GOV_ID_COPY
+  label: Copy of Government ID
+  category: Government-Issued Identification
+  method: keyword
+  patterns:
+  - \b(?:photocopy|copy|image|scan|photo)\s+of\s+(?:a\s+)?(?:government[- ]issued|passport|driver.?s?\s*licen[sc]e|social\s+security\s+card|id\s+card)\b
+  - \b(?:passport|driver.?s?\s*licen[sc]e|social\s+security\s+card)\s+(?:photocopy|copy|image|scan)\b
+
+
+# ============================================================
+# B. Birth Information
+# ============================================================
+
+# B.i — Full Date of Birth (month, day, AND year required)
+- key: DOB
+  label: Date of Birth
+  category: Birth Information
+  method: labeled_value
+  per_person: true
+  label_pattern: date\s*of\s*birth|d\.?o\.?b\.?|born(?:\s*on)?|birth\s*date
+  value_pattern: \d{1,2}[/\-]\d{1,2}[/\-]\d{2,4}|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2},?\s+\d{4}
+  min_digits: 0
+  window: 30
+
+# B.ii — Copy of Birth Certificate
+- key: BIRTH_CERT
+  label: Copy of Birth Certificate
+  category: Birth Information
+  method: keyword
+  patterns:
+  - \bbirth\s*certificate\b
+
+
+# ============================================================
+# C. Contact Information
+# ============================================================
+
+# C.i — Personal phone number (home) -- labeled
+- key: PHONE_HOME
+  label: Personal Phone (Home)
+  category: Contact Information
+  method: labeled_value
+  per_person: true
+  label_pattern: (?:home|residence|residential)\s*(?:phone|tel(?:ephone)?|number|ph\.?|#)|h\.?\s*ph\.?
+  value_pattern: (?:\+?1[-.\s]?)?(?:\(\d{3}\)|\d{3})[-.\s]?\d{3}[-.\s]?\d{4}
+  min_digits: 10
+  window: 30
+
+# C.ii — Personal phone number (mobile) -- labeled
+- key: PHONE_MOBILE
+  label: Personal Phone (Mobile)
+  category: Contact Information
+  method: labeled_value
+  per_person: true
+  label_pattern: (?:mobile|cell(?:ular)?|personal)\s*(?:phone|tel(?:ephone)?|number|ph\.?|#)|m\.?\s*ph\.?
+  value_pattern: (?:\+?1[-.\s]?)?(?:\(\d{3}\)|\d{3})[-.\s]?\d{3}[-.\s]?\d{4}
+  min_digits: 10
+  window: 30
+
+# C.i/ii — Phone number without label (reviewer determines home vs. mobile)
+- key: PHONE
+  label: Phone Number
+  category: Contact Information
+  method: regex
+  per_person: true
+  patterns:
+  - (?<!\d)(?:\+?1[-.\s]?)?(?:\(\d{3}\)|\d{3})[-.\s]?\d{3}[-.\s]?\d{4}(?!\d)
+
+# C.iii — Personal email address
+- key: EMAIL
+  label: Email Address
+  category: Contact Information
+  method: regex
+  per_person: true
+  casefold: true
+  patterns:
+  - \b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b
+
+# C.iv — Home address
+- key: ADDRESS
+  label: Home Address
+  category: Contact Information
+  method: address
+
+
+# ============================================================
+# D. Financial Account Information
+# ============================================================
+
+# D.i — Transactional information
+- key: FIN_TRANSACTIONAL
+  label: Transactional Information
+  category: Financial Account Information
+  method: keyword
+  patterns:
+  - \b(?:transaction(?:al)?\s*(?:id|number|history|record)|account\s*statement|bank\s*statement|wire\s*transfer)\b
+
+# D.ii.1 — Full credit or debit card number (Luhn + IIN validated)
+- key: CARD
+  label: Payment Card Number
+  category: Financial Account Information
+  method: regex
+  per_person: true
+  luhn: true
+  patterns:
+  - \b(?:\d[ -]?){13,19}\b
+
+# D.ii.2 — Full bank account number / IBAN
+- key: BANK_ACCOUNT
+  label: Bank Account Number
+  category: Financial Account Information
+  method: labeled_value
+  per_person: true
+  label_pattern: (?:bank\s*)?account\s*(?:no\.?|number|#)|\biban\b|routing\s*(?:no\.?|number)?|sort\s*code
+  value_pattern: '[A-Z]{2}\d{2}[A-Z0-9]{10,30}|\d{6,17}'
+  min_digits: 6
+  window: 30
+
+# D.ii.3 — Loan number
+- key: LOAN_NUMBER
+  label: Loan Number
+  category: Financial Account Information
+  method: labeled_value
+  label_pattern: loan\s*(?:no\.?|number|#|id)|mortgage\s*(?:no\.?|number|#)
+  value_pattern: '[A-Za-z0-9-]{5,20}'
+  min_digits: 4
+  window: 25
+
+# D.iii — Bank account balance
+- key: BANK_BALANCE
+  label: Bank Account Balance
+  category: Financial Account Information
+  method: keyword
+  patterns:
+  - \b(?:account\s*balance|available\s*balance|current\s*balance|ending\s*balance|closing\s*balance)\b
+
+# D.iv — Payment card expiration date
+- key: CARD_EXPIRY
+  label: Card Expiration Date
+  category: Financial Account Information
+  method: labeled_value
+  label_pattern: exp(?:iry|iration)?\.?\s*(?:date)?|valid\s*(?:thru|through|until)|expires?
+  value_pattern: '(?:0[1-9]|1[0-2])[/\-]\d{2,4}'
+  min_digits: 4
+  window: 20
+
+# D.v — Payment card security code (CVV/CVC)
+- key: CARD_CVV
+  label: Card Security Code
+  category: Financial Account Information
+  method: keyword
+  patterns:
+  - \b(?:cvv2?|cvc2?|card\s*(?:verification|security)\s*(?:value|code|number)|security\s*code)\b
+
+# D.vi.1 — Financial account username/email + password
+- key: CREDS_FINANCIAL
+  label: Financial Account Credentials
+  category: Financial Account Information
+  method: keyword
+  patterns:
+  - \b(?:online\s*banking|banking\s*portal|financial\s*account)\s*password\b
+  - \b(?:bank|credit\s*card|brokerage|investment)\s*(?:account\s*)?(?:password|login|credentials)\b
+
+# D.vi.2 — Security question and answer (financial)
+- key: SECURITY_QA_FIN
+  label: Security Q&A (Financial)
+  category: Financial Account Information
+  method: keyword
+  patterns:
+  - \bsecurity\s*question\b.{0,80}\bsecurity\s*answer\b
+  - \bsecurity\s*answer\b.{0,80}\bsecurity\s*question\b
+
+# D.vi.3 — PIN (financial)
+- key: PIN_FINANCIAL
+  label: PIN (Financial)
+  category: Financial Account Information
+  method: keyword
+  patterns:
+  - \batm\s*pin\b
+  - \bdebit\s*(?:card\s*)?pin\b
+  - \bpin\s*(?:number|code)\b
+
+
+# ============================================================
+# E. Access Credentials (Non-Financial Account)
+# ============================================================
+
+# E.i — Username or email + password (non-financial)
+- key: PASSWORD
+  label: Access Credentials
+  category: Access Credentials (Non-Financial Account)
+  method: keyword
+  patterns:
+  - \bpassword\b
+
+# E.ii — Security answer (non-financial)
+- key: SECURITY_ANSWER
+  label: Security Answer
+  category: Access Credentials (Non-Financial Account)
+  method: keyword
+  patterns:
+  - \bsecurity\s*answer\b
+  - \bsecurity\s*question\b
+
+# E.iii — PIN (non-financial)
+- key: PIN_NONFIN
+  label: PIN (Non-Financial)
+  category: Access Credentials (Non-Financial Account)
+  method: keyword
+  patterns:
+  - \b(?:phone|voicemail|device|account)\s*pin\b
+
+
+# ============================================================
+# F. Health-Related Information
+# ============================================================
+
+# F.i — Medical history
+- key: HEALTH_HISTORY
+  label: Medical History
+  category: Health-Related Information
+  method: keyword
+  patterns:
+  - \b(?:medical\s*history|health\s*(?:record|history)|patient\s*(?:record|history))\b
+
+# F.ii — Mental or physical condition
+- key: HEALTH_CONDITION
+  label: Mental/Physical Condition
+  category: Health-Related Information
+  method: keyword
+  patterns:
+  - \b(?:mental\s*(?:health\s*)?(?:condition|illness|disorder|diagnosis)|physical\s*condition|disability\s*(?:status|record))\b
+  - \b(?:diagnos(?:is|ed|es|tic)|disorder|chronic\s*illness)\b
+
+# F.iii — Medical treatment or diagnosis
+- key: HEALTH_TREATMENT
+  label: Medical Treatment/Diagnosis
+  category: Health-Related Information
+  method: keyword
+  patterns:
+  - \b(?:medical\s*(?:treatment|procedure|diagnosis)|treatment\s*plan|prescription|medication|therapy|surgery|hospitali[zs]ation)\b
+
+# F.iv.1 — Insurance policy number
+- key: HEALTH_INS_POLICY
+  label: Insurance Policy Number
+  category: Health-Related Information
+  method: labeled_value
+  label_pattern: (?:health\s*)?insurance\s*(?:policy\s*)?(?:no\.?|number|#|id)|policy\s*(?:no\.?|number|#)
+  value_pattern: '[A-Za-z0-9-]{5,20}'
+  min_digits: 4
+  window: 30
+
+# F.iv.2 — Subscriber identification number / member ID
+- key: HEALTH_INS_SUBSCRIBER
+  label: Insurance Subscriber ID
+  category: Health-Related Information
+  method: labeled_value
+  label_pattern: subscriber\s*(?:id|identification|no\.?|number)|member\s*(?:id|no\.?|number)
+  value_pattern: '[A-Za-z0-9-]{5,20}'
+  min_digits: 4
+  window: 25
+
+# F.iv.6/7 — Claims information/history, appeals records
+- key: HEALTH_INS_CLAIMS
+  label: Insurance Claims/Appeals
+  category: Health-Related Information
+  method: keyword
+  patterns:
+  - \b(?:claim\s*(?:number|id|history|information|record)|appeals?\s*record|explanation\s*of\s*benefits|\bEOB\b)\b
+
+# F.iv.4/5/8 — Other health insurance mentions (application, transactions, other)
+- key: HEALTH_INSURANCE
+  label: Health Insurance Information
+  category: Health-Related Information
+  method: keyword
+  patterns:
+  - \b(?:health\s*insurance|insurance\s*(?:plan|coverage|benefit|application)|insurance\s*transaction)\b
+
+
+# ============================================================
+# G. Biometric Data
+# ============================================================
+
+# G.i — Fingerprint
+- key: BIOMETRIC_FINGERPRINT
+  label: Fingerprint
+  category: Biometric Data
+  method: keyword
+  patterns:
+  - \bfingerprint\b
+
+# G.ii — Voice Print
+- key: BIOMETRIC_VOICE
+  label: Voice Print
+  category: Biometric Data
+  method: keyword
+  patterns:
+  - \bvoice\s*(?:print|recognition|biometric)\b
+
+# G.iii — Genetic data / DNA
+- key: BIOMETRIC_GENETIC
+  label: Genetic/DNA Data
+  category: Biometric Data
+  method: keyword
+  patterns:
+  - \b(?:genetic\s*(?:print|data|test|profile|information)|dna\s*(?:profile|test|sample|data))\b
+
+# G.iv — Retina / Iris image
+- key: BIOMETRIC_RETINA
+  label: Retina/Iris Image
+  category: Biometric Data
+  method: keyword
+  patterns:
+  - \b(?:retina(?:\s*scan)?|iris\s*(?:scan|image|recognition))\b
+
+
+# ============================================================
+# H. Family Information
+# ============================================================
+
+# H.i — Mother's maiden name
+- key: MAIDEN_NAME
+  label: Mother's Maiden Name
+  category: Family Information
+  method: labeled_value
+  label_pattern: mother'?s?\s*maiden\s*name|maiden\s*name
+  value_pattern: '[A-Z][A-Za-z\-]+'
+  min_digits: 0
+  window: 30
+
+# H.ii — Copy of marriage certificate
+- key: MARRIAGE_CERT
+  label: Copy of Marriage Certificate
+  category: Family Information
+  method: keyword
+  patterns:
+  - \bmarriage\s*certificate\b
+
+
+# ============================================================
+# I. Demographic Information
+# ============================================================
+
+# I.i — Race / Ethnicity
+- key: DEMOGRAPHIC_RACE
+  label: Race/Ethnicity
+  category: Demographic Information
+  method: keyword
+  patterns:
+  - \b(?:race|ethnicity|racial|ethnic\s*(?:origin|background))\b
+
+# I.ii — Sexual orientation
+- key: DEMOGRAPHIC_ORIENTATION
+  label: Sexual Orientation
+  category: Demographic Information
+  method: keyword
+  patterns:
+  - \b(?:sexual\s*orientation|gender\s*identity)\b
+
+# I.iii — Religion / Philosophical beliefs
+- key: DEMOGRAPHIC_RELIGION
+  label: Religion/Philosophical Beliefs
+  category: Demographic Information
+  method: keyword
+  patterns:
+  - \b(?:religion|religious\s*belief|philosophical\s*belief|faith|creed)\b
+
+# I.iv — Criminal convictions and offenses
+- key: DEMOGRAPHIC_CRIMINAL
+  label: Criminal Convictions
+  category: Demographic Information
+  method: keyword
+  patterns:
+  - \b(?:criminal\s*(?:conviction|offense|record)|felony|misdemeanor|arrest\s*record|prior\s*conviction)\b
+
+# I.v — Trade union membership
+- key: DEMOGRAPHIC_UNION
+  label: Trade Union Membership
+  category: Demographic Information
+  method: keyword
+  patterns:
+  - \b(?:trade\s*union|labor\s*union|union\s*member(?:ship)?|collective\s*bargaining)\b
+
+
+# ============================================================
+# J. Student-Related Information
+# ============================================================
+
+# J.i — Student Identification Number
+- key: STUDENT_ID
+  label: Student Identification Number
+  category: Student-Related Information
+  method: labeled_value
+  per_person: true
+  label_pattern: student\s*(?:id|identification|no\.?|number)
+  value_pattern: '[A-Za-z0-9-]{4,16}'
+  min_digits: 4
+  window: 25
+
+
+# ============================================================
+# K. Work-Related Information
+# ============================================================
+
+# K.i — Employee Identification Number
+- key: EMPLOYEE_ID
+  label: Employee Identification Number
+  category: Work-Related Information
+  method: labeled_value
+  per_person: true
+  label_pattern: employee\s*(?:id|identification|no\.?|number)|\bemp\.?\s*(?:id|no\.?)\b
+  value_pattern: '[A-Za-z0-9-]{4,16}'
+  min_digits: 4
+  window: 25
+
+# K.ii — Salary or Compensation Information
+- key: SALARY
+  label: Salary/Compensation
+  category: Work-Related Information
+  method: labeled_value
+  label_pattern: (?:annual\s*)?salary|compensation|wages?|pay(?:roll|check|stub)?|hourly\s*rate|base\s*(?:pay|salary)|earnings?|income|remuneration|gross\s*(?:pay|wages?)|net\s*(?:pay|wages?)|take[\s-]?home|total\s*(?:pay|comp(?:ensation)?)
+  value_pattern: '[$£€]?\s*\d[\d,]*(?:\.\d{1,2})?'
+  min_digits: 3
+  window: 25
+
+# K.iii — Work-Related Evaluation
+- key: WORK_EVALUATION
+  label: Work-Related Evaluation
+  category: Work-Related Information
+  method: keyword
+  patterns:
+  - \b(?:performance\s*(?:review|evaluation|appraisal|rating)|work\s*evaluation|annual\s*review)\b
+
+# K.iv — Disciplinary Record or Report
+- key: WORK_DISCIPLINARY
+  label: Disciplinary Record
+  category: Work-Related Information
+  method: keyword
+  patterns:
+  - \b(?:disciplinary\s*(?:record|report|action|notice|letter)|written\s*warning|termination\s*(?:notice|letter))\b
+
+# K.v — Worker's Compensation Claims
+- key: WORKERS_COMP
+  label: Workers Compensation Claims
+  category: Work-Related Information
+  method: keyword
+  patterns:
+  - \bworkers'?\s*comp(?:ensation)?\s*(?:claim|case|report|information)?\b
+
+# K.vi — Employment Application Information
+- key: EMPLOYMENT_APP
+  label: Employment Application
+  category: Work-Related Information
+  method: keyword
+  patterns:
+  - \b(?:employment\s*application|job\s*application|resume|curriculum\s*vitae)\b

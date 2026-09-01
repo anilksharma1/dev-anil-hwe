@@ -1,0 +1,2 @@
+-r requirements.txt
+pywin32>=306        # Windows-only: COM automation for .doc/.xls/.ppt conversion via Office

@@ -1,0 +1,2 @@
+-r requirements-windows.txt
+scaling-lib[dev] @ git+https://github.com/ldmglobal-com/scaling-lib

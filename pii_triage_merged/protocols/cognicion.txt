@@ -1,0 +1,45 @@
+COGNICION CIR PI REVIEW PROTOCOL — DATA-SUBJECT COUNTING RULES
+
+These are the substantive data-subject rules that were previously hardcoded in the BDE
+count prompt. They now live here as an ingestable protocol so the generic counting
+scaffold + this protocol reproduces the tool's prior counting behaviour. Ingest with:
+
+    python -m pii_triage ingest --project cognicion --protocol protocols/cognicion.txt --llm
+
+WHEN AN INDIVIDUAL COUNTS AS A DATA SUBJECT (jurisdiction matters):
+- NON-US data subject (or jurisdiction UNCLEAR — default to this): counts if the document
+  has AT LEAST ONE PII TYPE below for them, EVEN IF NO NAME is present (name captured as
+  "[Unknown]"). Infer non-US from foreign addresses, foreign ID types, or issuing
+  countries; if you cannot tell whether the person is US or non-US, treat as non-US.
+- US data subject: counts ONLY if (1) a NAME is present together with at least one PII TYPE
+  below, OR (2) an email address together with a password or security question/answer. A US
+  person with NO name counts ONLY if an SSN, Tax ID, or other Government-issued ID is present.
+- A bare NAME with no other PII attached is NOT a data subject (does not count).
+
+PII TYPES (any ONE qualifies an individual):
+A. Government-Issued ID — SSN, passport #, driver's license #, Taxpayer ID (TIN), National
+   ID / National Insurance #, Alien Registration #, Military ID, Tribal ID, other gov ID, or
+   a photocopy/image of a gov ID. Include a FULL number, a partial with 5+ digits, or an ID
+   image.
+B. Birth — full Date of Birth (month, day, AND year), or a birth certificate copy.
+C. Contact — personal phone (home or mobile), personal email, or home/residential address.
+D. Financial Account — transactional info, financial account number (full credit/debit card,
+   full bank account, loan #, other), bank balance, card expiration date, card security code,
+   financial access credentials (username/email WITH password or security answer — NOT
+   one-time codes), security Q&A, or PIN.
+E. Access Credentials (non-financial) — username/email WITH password or security answer, a
+   security answer, or a PIN.
+F. Health — medical history, mental/physical condition, treatment/diagnosis, or health
+   insurance info (policy #, subscriber ID, claims, appeals, etc.).
+G. Biometric — fingerprint, voice print, genetic/DNA, retina/iris.
+H. Family — mother's maiden name, or marriage certificate copy.
+I. Demographic — race/ethnicity, sexual orientation, religion/philosophical belief, criminal
+   convictions/offenses, or trade union membership.
+J. Student — student identification number.
+K. Work-Related — employee ID number, salary/compensation, work evaluation, disciplinary
+   record, workers' compensation claim, or employment application info.
+
+NOTE: The reviewers' "entity" count historically treated a document with more than 50 data
+subjects as a "51+ Entities" file. That threshold is a downstream decision (the tool
+compares the count to the project's configured bde_threshold); it is intentionally NOT part
+of the counting instruction, so the same protocol works for a matter whose threshold is 7.

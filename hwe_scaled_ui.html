@@ -1,0 +1,772 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HWE Runner — Scaled</title>
+<style>
+  /* Lifted from the local HWE Runner so the two are visibly the same product. Data colours are the
+     validated categorical slots 1 (blue) / 2 (orange); status colours always ship with an icon +
+     label, never colour alone. Chrome stays neutral so the data is the only loud thing. */
+  :root{
+    --surface-app:#f4f5f6; --surface-2:#fff; --ink:#0b0b0b; --ink-2:#52514e; --ink-3:#7b7a75;
+    --rule:#e3e4e2; --rule-2:#eceded;
+    --series-1:#2a78d6; --series-2:#eb6834; --track:#b7d3f6;
+    --good:#0ca30c; --warning:#fab219; --critical:#d03b3b;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--surface-app);color:var(--ink);font:14px/1.5 var(--sans);-webkit-font-smoothing:antialiased}
+  .app{display:grid;grid-template-columns:216px 1fr;min-height:100vh}
+  .side{background:#232a31;color:#cfd6dc;padding:18px 0}
+  .brand{padding:0 18px 18px;border-bottom:1px solid #333c45;margin-bottom:12px}
+  .brand b{color:#fff;font-size:15px;display:block}.brand span{font-size:11.5px;color:#8b959e}
+  .nav{list-style:none;margin:0;padding:0}
+  .nav button{all:unset;box-sizing:border-box;display:flex;gap:10px;align-items:center;
+    width:100%;padding:9px 18px;font:inherit;font-size:13.5px;color:#cfd6dc;cursor:pointer}
+  .nav button:hover{background:#2c343c;color:#fff}
+  .nav button[aria-current=true]{background:#2f6fbf;color:#fff}
+  .nav .num{width:17px;height:17px;border-radius:50%;background:#3a444e;font-size:10.5px;
+    display:grid;place-items:center;flex:none;color:#b9c2ca}
+  .nav button[aria-current=true] .num{background:rgba(255,255,255,.22);color:#fff}
+  /* a filesystem path has no spaces to wrap at — let it break anywhere so it can't spill past the sidebar */
+  .side .note{padding:14px 18px 0;font-size:11px;color:#7d878f;line-height:1.45;overflow-wrap:anywhere}
+  main{padding:26px 30px 60px;max-width:1080px}
+  h1{font-size:21px;margin:0 0 3px}.sub{color:var(--ink-2);font-size:13.5px;margin:0 0 22px}
+  h2{font-size:11px;text-transform:uppercase;letter-spacing:.09em;color:var(--ink-3);margin:26px 0 11px;font-weight:600}
+  .card{background:var(--surface-2);border:1px solid var(--rule);border-radius:8px;padding:18px 20px}
+  .card+.card{margin-top:14px}
+  .row{display:flex;gap:14px;flex-wrap:wrap}.row>*{flex:1 1 0;min-width:0}
+  .tile{background:var(--surface-2);border:1px solid var(--rule);border-radius:8px;padding:14px 16px}
+  .tile .lab{font-size:12px;color:var(--ink-2)}
+  .tile .val{font-size:25px;font-weight:600;letter-spacing:-.5px;margin-top:3px;overflow-wrap:anywhere}
+  /* for long string values (image ref, app name): smaller mono that wraps to as many lines as needed */
+  .tile .val.mono{font-size:14px;font-weight:600;letter-spacing:0;font-family:var(--mono);line-height:1.35}
+  .tile .val.nm{font-size:15px;font-weight:500;color:var(--ink-3);letter-spacing:0}
+  .tile .dl{font-size:11.5px;color:var(--ink-3);margin-top:1px}
+  .hero{font-size:52px;font-weight:650;letter-spacing:-1.6px;line-height:1.02}
+  .hero-lab{font-size:13px;color:var(--ink-2);margin-top:4px}
+  .bars{display:grid;gap:9px}
+  .bar-row{display:grid;grid-template-columns:180px 1fr 116px;align-items:center;gap:12px}
+  .bar-row .nm{font-size:13px;color:var(--ink-2)}
+  .bar-track{background:var(--rule-2);border-radius:2px;height:18px}
+  .bar-fill{height:18px;background:var(--series-1);border-radius:0 4px 4px 0}
+  .bar-row .vv{font-size:13px;text-align:right;font-variant-numeric:tabular-nums}
+  .bar-row .pc{font-size:11.5px;color:var(--ink-3)}
+  .stack{display:flex;height:22px;gap:2px}.stack>span{border-radius:2px}
+  .legend{display:flex;gap:16px;margin-top:10px;font-size:12.5px;color:var(--ink-2);flex-wrap:wrap}
+  .legend i{width:10px;height:10px;border-radius:2px;display:inline-block;margin-right:6px}
+  .ok{color:var(--good)}.warn{color:#8a6410}.bad{color:var(--critical)}
+  .chk{display:grid;grid-template-columns:20px 220px 1fr;gap:10px;align-items:baseline;padding:7px 0;
+    border-bottom:1px solid var(--rule-2);font-size:13.5px}
+  .chk:last-child{border-bottom:0}.chk .ic{font-weight:700;font-size:13px}
+  .chk .k{color:var(--ink)}.chk .v{color:var(--ink-2);font-size:12.5px}
+  .chk .detail{font-family:var(--mono);font-size:11.5px;color:var(--ink-3);margin-top:5px;
+    white-space:pre-wrap;line-height:1.5}
+  .envgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px 22px}
+  .envrow{display:flex;gap:8px;align-items:baseline;font-size:12.5px;padding:3px 0}
+  .envrow .st{font-weight:700;width:14px;flex:none}
+  /* long env names must wrap inside their own cell, never spill into the next column */
+  .envrow>span:last-child{min-width:0;overflow-wrap:anywhere}
+  .stale{color:var(--critical);font-weight:600}
+  label.f{display:block;font-size:12px;color:var(--ink-2);margin:0 0 5px}
+  input[type=text],input[type=number],select{font:inherit;font-size:13.5px;padding:8px 10px;
+    border:1px solid #cfd3d6;border-radius:6px;background:#fff;color:var(--ink);width:100%}
+  input.mono{font-family:var(--mono);font-size:12.5px}
+  .btn{all:unset;box-sizing:border-box;display:inline-block;padding:8px 15px;border-radius:6px;cursor:pointer;font:inherit;
+    font-size:13.5px;background:#eceff1;color:var(--ink);border:1px solid #cfd3d6}
+  .btn:hover{background:#e3e7ea}
+  .btn.pri{background:#2f6fbf;color:#fff;border-color:#2a63ab}.btn.pri:hover{background:#2a63ab}
+  .btn.danger{color:#9c2c2c;border-color:#e2bcbc;background:#fdf4f4}
+  .btn[disabled]{opacity:.45;cursor:not-allowed}
+  .why{font-size:12px;color:var(--ink-3);margin-left:10px}
+  .cmd{font-family:var(--mono);font-size:11.5px;background:#232a31;color:#d6dde3;padding:12px 14px;
+    border-radius:7px;overflow-x:auto;white-space:pre-wrap;word-break:break-all;line-height:1.6}
+  pre.out{font-family:var(--mono);font-size:11.5px;background:#232a31;color:#d6dde3;padding:12px 14px;
+    border-radius:7px;overflow:auto;max-height:460px;margin:0;white-space:pre-wrap}
+  .callout{border:1px solid var(--rule);border-left:3px solid var(--series-1);background:#f7fafd;
+    border-radius:6px;padding:12px 14px;font-size:13px}
+  .callout.alarm{border-left-color:var(--critical);background:#fdf5f5}
+  .callout.good{border-left-color:var(--good);background:#f4fbf4}
+  .callout.muted{border-left-color:var(--ink-3);background:#f7f7f6;color:var(--ink-2)}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--ink-3);
+    font-weight:600;padding:0 10px 7px 0;border-bottom:1px solid var(--rule)}
+  td{padding:8px 10px 8px 0;border-bottom:1px solid var(--rule-2);color:var(--ink-2)}
+  td.k{color:var(--ink)}td.n{text-align:right;font-variant-numeric:tabular-nums}
+  tr:last-child td{border-bottom:0}
+  .tblwrap{overflow:auto;max-height:420px}
+  .pill{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;padding:3px 9px;border-radius:999px;
+    border:1px solid var(--rule);background:#fff;color:var(--ink-2)}
+  /* content-sized chips that reflow to fill the width — each stays on one line, group wraps */
+  .chips{display:flex;flex-wrap:wrap;gap:8px}
+  .chips .pill{white-space:nowrap}
+  .pill.done{border-color:#c3e6c3;background:#f4fbf4;color:#1c6b1c}
+  .pill.ext{border-color:#cdd3d8;background:#f4f6f7;color:#4a5560}
+  .dot{width:7px;height:7px;border-radius:50%;background:currentColor}
+  .hide{display:none!important}
+</style>
+</head>
+<body>
+<div class="app">
+  <nav class="side">
+    <div class="brand"><b>HWE Runner</b><span id="verline">Scaled · read-only</span></div>
+    <ul class="nav" id="nav"></ul>
+    <p class="note" id="sidenote"></p>
+  </nav>
+  <main id="main">loading…</main>
+</div>
+
+<script>
+const $ = (s,r=document)=>r.querySelector(s);
+const api = async (p,body)=> {
+  const r = await fetch(p, body ? {method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(body)} : {});
+  return r.json();
+};
+const fmt = n => (n==null?'—':Number(n).toLocaleString('en-US'));
+const nm  = n => (n==null?'<span class="val nm">not measured</span>':fmt(n));   // never a fake zero
+const money = n => n==null?'—':'$'+Number(n).toFixed(2);
+const esc = s => String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+let ST = {screen:'setup', ctx:null, runs:[], runId:null, run:null, out:null, form:{mode:'job'},
+          setup:null, monitor:null, monitorJob:null, poll:null, winTrack:null, lock:null, reset:null,
+          autoResultsFor:null};
+
+const NAV=[['setup','Setup'],['new','New run'],['runs','Runs'],['monitor','Monitor'],
+           ['results','Results'],['score','vs manual review'],['compare','Compare runs'],
+           ['build','Build & deploy']];
+
+function go(s){
+  ST.screen=s;
+  if(s!=='monitor'){ clearTimeout(ST.poll); ST.poll=null; }
+  if(s==='setup' && !ST.setup) loadSetup();
+  if(s==='monitor') loadMonitor();
+  if(s==='build') loadBuild();
+  if(s==='new' || s==='runs'){ ST.reset=null; loadLock().then(()=>{ if(ST.screen===s) draw(); }); }
+  draw(); window.scrollTo(0,0);
+}
+async function loadLock(){ ST.lock = (await api('/api/lock')).active; }
+const tile=(lab,val,dl)=>`<div class="tile"><div class="lab">${lab}</div>
+  <div class="val">${val}</div>${dl?`<div class="dl">${dl}</div>`:''}</div>`;
+const monoTile=(lab,val,dl)=>`<div class="tile"><div class="lab">${lab}</div>
+  <div class="val mono">${val}</div>${dl?`<div class="dl">${dl}</div>`:''}</div>`;
+
+/* ---------------------------------------------------------------- screens */
+const S={};
+
+const staleSecs = iso => iso ? (Date.now()-new Date(iso).getTime())/1000 : 1e9;
+const clock = iso => iso ? new Date(iso).toLocaleTimeString('en-US',{hour12:false}) : '—';
+
+S.setup = () => {
+  const c = ST.setup;
+  if(!c) return `<h1>Setup</h1><p class="sub">Measuring the environment, the store, and what the workers are running…</p>
+    <div class="card">Running preflight… <button class="btn" onclick="loadSetup()">Refresh</button></div>`;
+  const rows=c.checks||[], bad=rows.filter(r=>r.state==='bad'), warn=rows.filter(r=>r.state==='warn');
+  return `<h1>Setup</h1>
+  <p class="sub">Measured on this machine and against the live store — nothing is assumed.
+    ${bad.length?`<b class="bad">Fix the ${bad.length} red row(s) before running.</b>`
+      :warn.length?`<b class="warn">${warn.length} caution(s); nothing blocking.</b>`:'Nothing blocking.'}
+    <button class="btn" style="padding:2px 10px;font-size:12px;margin-left:8px" onclick="loadSetup()">Re-check</button></p>
+  <div class="card">${rows.map(r=>`<div class="chk">
+      <div class="ic ${r.state}">${r.state==='ok'?'✓':r.state==='warn'?'!':'✕'}</div>
+      <div class="k">${esc(r.key)}</div><div class="v">${esc(r.val)}
+      ${r.detail?`<div class="detail">${esc(r.detail)}</div>`:''}</div></div>`).join('')}</div>
+  ${c.env?envReport(c.env):''}`;
+};
+
+function envReport(env){
+  const grp=(title,items,note)=>`<h2>${title}</h2><div class="card">
+    ${note?`<p style="font-size:12px;color:var(--ink-3);margin:0 0 8px">${note}</p>`:''}
+    <div class="envgrid">${items.map(x=>`<div class="envrow">
+      <span class="st ${x.set?'ok':'bad'}">${x.set?'✓':'✕'}</span>
+      <span><b>${esc(x.key)}</b><br><span style="color:var(--ink-3)">${esc(x.purpose)}</span></span>
+    </div>`).join('')}</div></div>`;
+  return `<h2 style="margin-top:26px">Environment — set / not-set only (values are never shown)</h2>
+    ${grp('Required on the ops VM', env.ops_required)}
+    ${grp('Storage endpoint '+(env.storage_endpoint_ok?'✓':'✕ — need a connection string OR both URLs'), env.ops_storage_endpoint)}
+    ${grp('Optional', env.ops_optional)}
+    ${grp('Build & deploy', env.build_deploy)}
+    ${grp('Worker-side (injected into the Container App — not needed on the ops VM)', env.worker_side,
+      'Consumed by the workers at runtime; blanks here are normal and are not flagged as errors.')}`;
+}
+
+S.monitor = () => {
+  const m = ST.monitor;
+  if(!m) return `<h1>Monitor</h1><p class="sub">Reading the status table…</p>
+    <div class="card">Loading… <button class="btn" onclick="loadMonitor()">Refresh</button></div>`;
+  if(m.error) return `<h1>Monitor</h1><div class="callout alarm" style="margin-top:8px">${esc(m.error)}</div>
+    <p style="margin-top:10px"><button class="btn" onclick="loadMonitor()">Retry</button></p>`;
+  const sc=m.status_counts||{}, Q=(m.queues&&m.queues.counts)||{}, qerr=(m.queues&&m.queues.error);
+  const total=m.total||0, done=m.files_completed||0, pct=total?(done/total*100):0;
+  const stale = staleSecs(m.at)>15, winN=Q.windows_queue_count;
+  return `<div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap">
+    <h1 style="margin-bottom:0">Monitor</h1>
+    <span class="pill ${stale?'fail':'done'}"><i class="dot"></i>${stale?'stale — last read '+esc(clock(m.at)):'as of '+esc(clock(m.at))}</span></div>
+  <p class="sub" style="font-family:var(--mono);font-size:12px">${esc(m.job_id)}</p>
+
+  <div class="card">
+    <div class="hero">${pct.toFixed(1)}<span style="font-size:26px">%</span></div>
+    <div class="hero-lab">${fmt(done)} of ${fmt(total)} files complete — from the status table (authoritative)</div>
+    <div class="meter" style="margin-top:14px"><i style="width:${pct}%"></i></div>
+  </div>
+  <div class="row" style="margin-top:14px">
+    ${tile('Pending', fmt(sc.pending||0), 'in queue, not yet claimed')}
+    ${tile('Processing', fmt(sc.processing||0), 'claimed by a worker')}
+    ${tile('Completed', fmt(sc.completed||0), '')}
+    ${tile('Failed', fmt((sc.failed||0)+(sc.dead_lettered||0)), fmt(sc.dead_lettered||0)+' dead-lettered')}
+  </div>
+
+  <h2>Throughput & the biggest wall-clock lever</h2>
+  <div class="row">
+    ${tile('Throughput', m.throughput_fpm!=null?fmt(m.throughput_fpm)+' files/min':nm(null), 'over the run so far')}
+    ${tile('Projected finish', m.eta_range_min?('~'+fmt(m.eta_range_min[0])+'–'+fmt(m.eta_range_min[1])+' min'):(done===total&&total?'complete':nm(null)), 'a range, not one number')}
+    ${tile('Rate-limit wait', m.rate_limit_wait_s!=null?fmt(m.rate_limit_wait_s)+' s':nm(null), 'time blocked awaiting permission to call')}
+  </div>
+
+  <h2>Autoscaling (observed)</h2>
+  <div class="row">
+    ${tile('Workers observed', fmt(m.worker_count), (m.workers||[]).join(', ')||'—')}
+    ${tile('Peak concurrency', fmt(m.peak_concurrency), 'task-level sweep — no per-call data exists')}
+    ${tile('Requested replicas', nm(null), 'needs the Container App scale rule (az) — not measured here')}
+  </div>
+
+  <h2 style="text-transform:none;letter-spacing:0;font-size:11px">QUEUES
+    <span style="color:var(--ink-3);font-weight:400"> · approximate · excludes in-flight · read ${esc(clock((m.queues||{}).at))}</span></h2>
+  ${qerr?`<div class="callout alarm">${esc(qerr)}</div>`:`<div class="row">
+    ${tile('Main queue', fmt(Q.queue_count), 'Linux work queue')}
+    ${tile('Windows queue', Q.windows_queue_count==null?nm(null):fmt(Q.windows_queue_count), 'legacy .doc/.xls/.ppt')}
+    ${tile('Dead-letter', fmt(Q.dead_letter_count), 'exhausted retries')}
+  </div>`}
+
+  ${winN?`<div class="callout alarm" style="margin-top:14px"><b>Windows leg: ${fmt(winN)} file(s) waiting.</b>
+    They will not progress until the Windows worker is running on the Windows VM:
+    <div class="cmd" style="margin-top:8px">python worker.py</div>
+    The UI cannot start it — it runs on a different machine.
+    ${ST.winTrack&&ST.winTrack.staticSecs>180?`<div class="stale" style="margin-top:6px">Depth has not moved in ~${Math.round(ST.winTrack.staticSecs/60)} min — is the Windows worker running?</div>`:''}</div>`:''}
+
+  ${m.stuck_count?`<div class="callout alarm" style="margin-top:14px"><b>${fmt(m.stuck_count)} stuck item(s).</b>
+    Claimed but not completed for longer than the ${fmt(m.visibility_timeout_s)}s visibility timeout — a
+    crashed worker's claim that must expire, or those documents are lost silently.
+    <div class="detail" style="font-family:var(--mono);font-size:11.5px;margin-top:6px;color:var(--ink-3)">${m.stuck.slice(0,8).map(s=>esc(s.file_name)+' · '+fmt(s.age_s)+'s · '+esc(s.worker_instance)).join('<br>')}</div></div>`:''}
+
+  ${(m.failures||[]).length?`<h2>Failures (file id + error class only — no document text, no PII)</h2>
+    <div class="card"><div class="tblwrap"><table><thead><tr><th>File</th><th>Status</th><th class="n">Tries</th><th>Error</th></tr></thead><tbody>
+    ${m.failures.slice(0,100).map(f=>`<tr><td class="k" style="font-family:var(--mono);font-size:11.5px">${esc(f.file_name)}</td>
+      <td>${esc(f.status)}</td><td class="n">${fmt(f.attempt_count)}</td>
+      <td style="font-family:var(--mono);font-size:11px;color:var(--critical)">${esc(f.error_message)}</td></tr>`).join('')}
+    </tbody></table></div></div>`:''}
+
+  <div class="callout muted" style="margin-top:16px">Worker logs across replicas are a Log Analytics
+    query, not a file tail — this screen never pretends to tail worker output. Only processes this UI
+    itself starts (enqueue, collect, report) get a console, on their own screens.</div>`;
+};
+
+S.runs = () => `<h1>Runs</h1>
+  ${activeBanner()}
+  <p class="sub">Every run this UI can see — the ones it started, plus historical runs reconstructed
+  from <span style="font-family:var(--mono)">outputs/</span>. The active run (if any) is archived-then-reset here.</p>
+  <div class="card">${ST.runs.length? `<table>
+    <thead><tr><th>Run</th><th>When</th><th>Who</th><th style="text-align:right">Files</th>
+      <th>Kind</th><th></th></tr></thead><tbody>
+    ${ST.runs.map(r=>`<tr>
+      <td class="k">${esc(r.name||r.id)}</td>
+      <td>${esc((r.created||'').replace('T',' ').slice(0,16))}</td>
+      <td>${esc(r.user||'—')}</td>
+      <td class="n">${fmt(r.done)}</td>
+      <td>${r.external?'<span class="pill ext"><i class="dot"></i>external</span>':'<span class="pill done"><i class="dot"></i>this UI</span>'}</td>
+      <td style="text-align:right"><button class="btn" style="padding:4px 10px;font-size:12px"
+        ${(r.has_inventory||!r.external)?'':'disabled'} onclick="open_('${esc(r.id)}')">Open</button>
+        ${(r.has_inventory||!r.external)?'':'<span class="why">no inventory</span>'}</td></tr>`).join('')}
+    </tbody></table>` : 'No runs found. Historical inventories live under <code>outputs/&lt;name&gt;/inventory.csv</code>.'}</div>`;
+
+S.results = () => {
+  const R = ST.run;
+  if(!R) return `<h1>Results</h1><p class="sub">No run selected — pick one from <b>Runs</b>.</p>`;
+  const m=R.meta||{}, s=R.summary;
+  if(!s) return `<h1>${esc(m.name||m.id)}</h1>
+    <p class="sub">${m.external?'This historical run has no inventory under outputs/.':'This run isn\'t collected yet.'}</p>
+    <div class="card">${m.external?'Nothing to collect — external runs are read from their existing inventory.':`
+      Each worker wrote a <code>result.json</code> to OUTPUT_MOUNT. <b>Collect</b> gathers them into this
+      run's inventory — then Report, Score, and Export all work off it. Collect once the run is drained
+      (Monitor shows 100%).
+      <p style="margin:12px 0 0"><button class="btn pri" onclick="collectRun()">Collect outputs (save this run)</button></p>
+      ${ST.out?`<div class="cmd" style="margin-top:12px">${esc(ST.out.argv_str||'')}</div>
+        <pre class="out" style="margin-top:8px">${esc(ST.out.out||'')}</pre>`:''}`}</div>`;
+  const c=s.cost||{}, o=s.ocr||{}, d=s.decision||{}, t=s.tokens||{};
+  const total=c.total_usd||0, lanes=Object.entries(s.lanes||{}).sort((a,b)=>b[1]-a[1]);
+  const maxLane=Math.max(1,...lanes.map(([,v])=>v));
+  const grades=Object.entries(s.grades||{});
+  const gOrder={clear_yes:0,likely_yes:1,borderline:2,likely_no:3,clear_no:4};
+  grades.sort((a,b)=>(gOrder[a[0]]??9)-(gOrder[b[0]]??9));
+  return `<div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap">
+    <h1 style="margin-bottom:0">${esc(m.name||m.id)}</h1>
+    ${m.external?'<span class="pill ext"><i class="dot"></i>external</span>':'<span class="pill done"><i class="dot"></i>this UI</span>'}</div>
+  <p class="sub">${fmt(s.files)} files${s.truncated?' (inventory capped for display)':''}
+     ${m.inventory?`· <span style="font-family:var(--mono);font-size:12px">${esc(m.inventory)}</span>`:''}</p>
+
+  <div class="card"><div class="hero">${money(total)}</div>
+    <div class="hero-lab">estimated API spend · display prices ($${c && DEF().price_per_1k_pages}/1k pages, $${DEF().price_per_1k_in}/1k tokens)</div>
+    <div class="stack" style="margin-top:18px">
+      <span style="width:${total?(c.di_usd/total*100):0}%;background:var(--series-1)"></span>
+      <span style="width:${total?(c.llm_usd/total*100):0}%;background:var(--series-2)"></span></div>
+    <div class="legend"><span><i style="background:var(--series-1)"></i>Document Intelligence ${money(c.di_usd)}</span>
+      <span><i style="background:var(--series-2)"></i>LLM ${money(c.llm_usd)}</span></div>
+    <p style="font-size:11.5px;color:var(--ink-3);margin:10px 0 0">${esc(c.note||'')}</p></div>
+
+  <h2>Billable units — not call counts</h2>
+  <div class="row">
+    ${tile('DI billable pages', fmt(o.di_pages_billable), fmt(o.ocr_pages)+' full-file + '+fmt(o.img_ocr_calls)+' embedded')}
+    ${tile('DI calls', fmt(o.di_calls), fmt(o.ocr_attempted)+' full-file attempts')}
+    ${tile('LLM tokens (total)', fmt(t.total), fmt(t.stage1)+' stage 1 · '+fmt(t.stage2)+' stage 2')}
+  </div>
+
+  <h2>Where they landed (stage-1 lane)</h2>
+  <div class="card"><div class="bars">${lanes.map(([k,v])=>`<div class="bar-row">
+      <div class="nm">${esc(k)}</div>
+      <div class="bar-track"><div class="bar-fill" style="width:${v/maxLane*100}%"></div></div>
+      <div class="vv">${fmt(v)} <span class="pc">${(v/s.files*100).toFixed(1)}%</span></div>
+    </div>`).join('')}</div></div>
+
+  ${grades.length?`<h2>Stage-2 graded responsiveness</h2>
+  <div class="card"><div class="bars">${grades.map(([k,v])=>`<div class="bar-row">
+      <div class="nm">${esc(k)}</div>
+      <div class="bar-track"><div class="bar-fill" style="width:${v/s.files*100}%;background:var(--series-2)"></div></div>
+      <div class="vv">${fmt(v)} <span class="pc">${(v/s.files*100).toFixed(1)}%</span></div>
+    </div>`).join('')}</div></div>`:''}
+
+  <div class="row" style="margin-top:14px">
+    ${tile('Rules-decided', fmt(d.rules_decided), 'no model call — must match across runs')}
+    ${tile('Model-decided', fmt(d.model_decided), fmt(d.llm_consulted)+' stage1 · '+fmt(d.s2_consulted)+' stage2')}
+    ${tile('Non-responsive (stage 1)', fmt(d.nr_stage1), 'the NR-removal decision')}
+    ${tile('BDE files', fmt(d.is_bde), fmt(d.s2_is_bde)+' at stage-2 threshold')}
+  </div>
+
+  ${(s.entity_labels||[]).length?`<h2>Entity types seen (labels only — never values)</h2>
+  <div class="card"><div class="chips">${s.entity_labels.map(([lab,n])=>
+    `<span class="pill">${esc(lab)} · ${fmt(n)}</span>`).join('')}</div></div>`:''}
+
+  <div class="callout muted" style="margin-top:16px"><b>Not measured in an inventory-only view.</b>
+    The in/out token split, cached tokens, rate-limit wait, replica count over time, retries, and
+    per-document two-pass token attribution come from the Azure Table or are not recorded at all.
+    They appear on the live monitor once a run is submitted through this UI — never as a zero here.</div>
+
+  <h2>Do more with this run</h2>
+  <p style="display:flex;gap:10px;flex-wrap:wrap">
+    <button class="btn pri" onclick="report()">Build Table 1 (report)</button>
+    <button class="btn" onclick="sample()">Draw sample</button>
+    <button class="btn" onclick="go('score')">Compare to manual review</button>
+    <button class="btn" onclick="go('compare')">Compare to another run</button>
+    <button class="btn" onclick="copyRow()">Copy row for cost log</button>
+    <button class="btn" onclick="location='/api/export?id='+encodeURIComponent(ST.runId)">Export run (zip)</button></p>
+  ${ST.out?`<div class="cmd" style="margin-top:6px">${esc(ST.out.argv_str||'')}</div>
+    ${ST.out.rows&&ST.out.rows.length?renderTable(ST.out.rows):`<pre class="out" style="margin-top:10px">${esc(ST.out.out||'')}</pre>`}`:''}
+
+  <h2>Provenance / command</h2>
+  <div class="cmd">${m.argv?esc(m.argv.map(x=>/\s/.test(x)?'"'+x+'"':x).join(' ')):'external run — the enqueue command was not recorded by this UI'}</div>`;
+};
+
+S.score = () => {
+  const R=ST.run, m=R?.meta||{}, f=ST.form;
+  return `<h1>Compared to manual review</h1>
+  <p class="sub">${R?esc(m.name||m.id):'No run selected'} · full scorecard (cost · NR/R · BDE) against the entities export</p>
+  ${!R?`<div class="card">Pick a run from <b>Runs</b> first.</div>`:`
+  <div class="card">
+    <label class="f">Entities export — CNG results (.csv or .xlsx) with a Control ID column and a Total Entities count</label>
+    <input class="mono" type="text" id="gold" value="${esc(f.gold||'')}"
+      placeholder="I:\\CNG_Data\\… CNG_Entities Export.csv" oninput="ST.form.gold=this.value">
+    <p style="font-size:12px;color:var(--ink-2);margin:6px 0 0">The export does double duty — <b>responsive = Total Entities &gt; 0</b>, <b>BDE = Total Entities ≥ the threshold below</b>. No separate Responsive/NR column needed.</p>
+    <div class="row" style="margin-top:12px">
+      <div><label class="f">id column</label><input type="text" id="idc" value="${esc(f.id_col||'')}" placeholder="Control ID" oninput="ST.form.id_col=this.value"></div>
+      <div><label class="f">count column</label><input type="text" id="cc" value="${esc(f.count_col||'')}" placeholder="Total Entities" oninput="ST.form.count_col=this.value"></div>
+      <div><label class="f">sheet (xlsx tab)</label><input type="text" id="sh" value="${esc(f.sheet||'')}" oninput="ST.form.sheet=this.value"></div>
+      <div><label class="f">BDE threshold (N+)</label><input type="number" min="1" id="bthr" value="${esc(f.score_bde||'')}" placeholder="${esc(m.bde_threshold||'7')}" oninput="ST.form.score_bde=this.value"></div>
+    </div>
+    <div style="margin-top:12px;max-width:640px"><label class="f">Files in the inventory but NOT in the export</label>
+      <select id="absent" onchange="ST.form.absent_means=this.value">
+        <option value="auto" ${(f.absent_means||'auto')==='auto'?'selected':''}>Auto — infer from whether the export has 0-count rows (default)</option>
+        <option value="zero" ${f.absent_means==='zero'?'selected':''}>Zero — absent = 0 entities = non-responsive (scores the whole corpus)</option>
+        <option value="unreviewed" ${f.absent_means==='unreviewed'?'selected':''}>Unreviewed — absent = never reviewed (scores only the intersection)</option>
+      </select>
+      <p style="font-size:12px;color:var(--ink-2);margin:6px 0 0">"Zero" assumes the export lists only files that HAVE entities, so anything absent is genuinely non-responsive. "Unreviewed" assumes it lists every reviewed file, including 0-count rows.</p>
+    </div>
+    <p style="margin:14px 0 0"><button class="btn pri" onclick="score()">Score this run</button>
+      <span class="why">id / count default to "Control ID" / "Total Entities" — fill only to override</span></p>
+  </div>
+  ${ST.out?`
+    ${ST.out.summary&&Object.keys(ST.out.summary).length?scoreSummary(ST.out.summary):''}
+    <div class="callout alarm" style="margin-top:14px"><b>Read the misses first</b> — files reviewers coded responsive that the tool cleared. Nothing downstream catches those.</div>
+    ${ST.out.scorecard?`<div class="callout good" style="margin-top:10px">Workbook written:
+      <span style="font-family:var(--mono)">${esc(ST.out.scorecard)}</span></div>`:''}
+    <h2>Full scorecard (terminal output)</h2>
+    <div class="cmd" style="margin-bottom:8px">${esc(ST.out.argv_str||'')}</div>
+    <pre class="out">${esc(ST.out.out||'')}</pre>`:''}`}`;
+};
+
+function scoreSummary(s){
+  const pct = v => v==null?'—':(Number(v)*100).toFixed(1)+'%';
+  const missBad = s.nr_accuracy!=null && Number(s.nr_accuracy)>0.05;   // miss rate — target < 5%
+  const overBad = s.r_accuracy!=null && Number(s.r_accuracy)>0.50;     // over-flag — target < 50%
+  return `<h2>Pipeline result — what a reviewer receives</h2>
+  <div class="row">
+    ${tile('Responsive recall', pct(s.recall), 'higher = fewer missed responsives')}
+    ${tile('Responsive precision', pct(s.precision), '')}
+    ${tile('Accuracy', pct(s.accuracy), s.f1!=null?('F1 '+Number(s.f1).toFixed(3)):'')}
+    ${tile('Scored', s.scored!=null?fmt(+s.scored):'—', 'TP '+(s.tp??'–')+' · FP '+(s.fp??'–')+' · FN '+(s.fn??'–')+' · TN '+(s.tn??'–'))}
+  </div>
+  <div class="row" style="margin-top:14px">
+    <div class="tile"><div class="lab">Missed notifications</div>
+      <div class="val ${missBad?'bad':'ok'}">${pct(s.nr_accuracy)}</div>
+      <div class="dl">of cleared files actually responsive · target &lt; 5%</div></div>
+    <div class="tile"><div class="lab">Over-flagged</div>
+      <div class="val ${overBad?'bad':'ok'}">${pct(s.r_accuracy)}</div>
+      <div class="dl">of flagged files actually NR · target &lt; 50%</div></div>
+    ${tile('Flagged for review', pct(s.flagged),
+      (s.over_call!=null?('over-call '+pct(s.over_call)):'')+(s.under_call!=null?(' · under-call '+pct(s.under_call)):''))}
+  </div>`;
+}
+
+S.compare = () => {
+  const usable = ST.runs.filter(r=>r.has_inventory);
+  const o=ST.out;
+  return `<h1>Compare two runs</h1>
+  <p class="sub">Rules-decided rows (no model call) must be byte-identical between two runs. Model-decided rows may differ.</p>
+  <div class="card">
+    <div class="row">
+      <div><label class="f">Run A</label><select id="cmpA">${usable.map(r=>`<option value="${esc(r.id)}">${esc(r.name||r.id)}</option>`).join('')}</select></div>
+      <div><label class="f">Run B</label><select id="cmpB">${usable.slice().reverse().map(r=>`<option value="${esc(r.id)}">${esc(r.name||r.id)}</option>`).join('')}</select></div>
+    </div>
+    <p style="margin:14px 0 0"><button class="btn pri" ${usable.length>1?'':'disabled'} onclick="compare()">Compare</button>
+      ${usable.length>1?'':'<span class="why">needs two runs with an inventory</span>'}</p>
+  </div>
+  ${o&&o.ok!==false?`
+    ${o.verdict==='clean'
+      ? `<div class="callout good" style="margin-top:14px"><b>✓ No rules-decided row moved.</b>
+         ${fmt(o.both_rules_decided)} rows were decided without any model call in both runs, and every
+         deterministic column matches — as it must.</div>`
+      : `<div class="callout alarm" style="margin-top:14px"><b>✕ ${fmt(o.moved_count)} rules-decided row(s) moved.</b>
+         These cost nothing and involve no model, so a change is a bug — or the two runs used a
+         different rulepack / detector build. Check the provenance diff below.</div>`}
+    <div class="row" style="margin-top:14px">
+      ${tile('Common files', fmt(o.common), esc(o.a_name)+' ∩ '+esc(o.b_name))}
+      ${tile('Rules-decided in both', fmt(o.both_rules_decided), 'the rows under the invariant')}
+      ${tile('Only in A', fmt(o.only_in_a), '')}
+      ${tile('Only in B', fmt(o.only_in_b), '')}
+    </div>
+    ${o.input_changed_count?`<div class="callout muted" style="margin-top:14px">
+      <b>${fmt(o.input_changed_count)} row(s) differ only on input columns</b> (e.g.
+      <span style="font-family:var(--mono)">size_bytes</span>, <span style="font-family:var(--mono)">status</span>)
+      — the file itself differed between the runs, commonly a <code>.DOC</code> re-saved by the Windows
+      conversion leg. The detectors agreed; this is not a regression.</div>`:''}
+    ${o.provenance_diff&&o.provenance_diff.length?`<h2>Provenance differences (usual explanation)</h2>
+      <div class="card"><table><thead><tr><th>Field</th><th>A</th><th>B</th></tr></thead><tbody>
+      ${o.provenance_diff.map(p=>`<tr><td class="k">${esc(p.key)}</td><td>${esc(p.a)}</td><td>${esc(p.b)}</td></tr>`).join('')}
+      </tbody></table></div>`:'<div class="callout muted" style="margin-top:14px">No provenance block on one or both runs (external runs carry none), so no provenance diff.</div>'}
+    ${o.moved&&o.moved.length?`<h2>Rows that moved</h2>
+      <div class="card"><div class="tblwrap"><table><thead><tr><th>rel_path</th><th>columns</th></tr></thead><tbody>
+      ${o.moved.map(mv=>`<tr><td class="k" style="font-family:var(--mono);font-size:11.5px">${esc(mv.rel_path)}</td>
+        <td>${mv.columns.map(c=>`<span class="pill" style="margin:1px">${esc(c)}</span>`).join(' ')}</td></tr>`).join('')}
+      </tbody></table></div></div>`:''}`
+  : o?`<div class="callout alarm" style="margin-top:14px">${esc(o.out||'could not compare')}</div>`:''}`;
+};
+
+S.new = () => {
+  const f=ST.form, lk=ST.lock, ck=f.check, mode=f.mode||'job';
+  if(lk) return `<h1>New run</h1>
+    <div class="callout alarm"><b>A run is already active — one at a time.</b>
+      <div style="margin-top:6px">${esc(lk.run_id)} · job <span style="font-family:var(--mono)">${esc(lk.job_id)}</span>
+      · by ${esc(lk.user)} · ${lk.measured?(lk.open_count===0?'drained (0 open)':fmt(lk.open_count)+' still pending/processing'):'store unreachable to measure'}</div>
+      <p style="margin:10px 0 0"><button class="btn" onclick="ST.monitorJob='${esc(lk.job_id)}';go('monitor')">Open monitor</button>
+        <button class="btn" onclick="go('runs')">Go to Runs to Archive &amp; reset</button></p></div>`;
+  const usable = ST.runs.filter(r=>r.has_inventory);
+  return `<h1>New run</h1>
+  <p class="sub">Validate the layout, see exactly what will be enqueued, then submit. The command is shown before it runs and stored with the run.</p>
+  <div class="card">
+    <div style="display:flex;gap:20px;flex-wrap:wrap">
+      <label style="font-size:13.5px"><input type="radio" name="mode" ${mode==='job'?'checked':''} onchange="ST.form.mode='job';ST.form.check=null;draw()"> Fresh job — enqueue every file</label>
+      <label style="font-size:13.5px"><input type="radio" name="mode" ${mode==='rescan'?'checked':''} onchange="ST.form.mode='rescan';ST.form.check=null;draw()"> Rescan the unresolved subset of a prior run</label>
+    </div>
+    ${mode==='rescan'?`<div class="row" style="margin-top:12px">
+      <div style="flex:2 1 260px"><label class="f">Prior run to rescan</label>
+        <select onchange="ST.form.run_id=this.value;ST.form.check=null;draw()">
+          <option value="">— pick a run with an inventory —</option>
+          ${usable.map(r=>`<option value="${esc(r.id)}" ${f.run_id===r.id?'selected':''}>${esc(r.name||r.id)}</option>`).join('')}</select></div>
+      <div style="flex:1 1 180px"><label class="f">Exclude lanes</label>
+        <input type="text" value="${esc(f.exclude_lanes||'likely_non_responsive')}" oninput="ST.form.exclude_lanes=this.value;ST.form.check=null"></div>
+    </div>`:''}
+  </div>
+  <div class="card">
+    <label class="f">Job directory (under INPUT_MOUNT — holds a <b>files/</b> folder + optional <b>protocol.*</b>)</label>
+    <div style="display:flex;gap:8px">
+      <input class="mono" type="text" id="jobdir" value="${esc(f.job_dir||'')}" placeholder="e.g. I:\\CNG_matter or /mnt/input/CNG_matter"
+        oninput="ST.form.job_dir=this.value;ST.form.check=null">
+      <button class="btn" onclick="checkRun()">Check</button>
+    </div>
+    ${ck ? renderCheck(ck) : `<p style="margin:8px 0 0;font-size:12.5px;color:var(--ink-3)">Press Check — the run can't start until the layout validates.</p>`}
+    <div style="margin-top:14px"><label class="f">Name this run</label>
+      <input type="text" value="${esc(f.name||'')}" placeholder="CNG demo — baseline" oninput="ST.form.name=this.value"></div>
+    <div style="margin-top:14px;max-width:560px"><label class="f">BDE threshold — entities that make a file a Big-Data / 51+ file</label>
+      <input type="number" min="1" value="${esc(f.bde_threshold??'')}" placeholder="e.g. 51 or 7 (blank = workers' default)"
+        oninput="ST.form.bde_threshold=this.value;ST.form.check=null;draw()">
+      <p style="font-size:12px;color:var(--ink-3);margin:5px 0 0">Set per project. Written to
+        <span style="font-family:var(--mono)">&lt;job dir&gt;/pii_job.json</span> so the workers scan this run at it;
+        blank uses their <span style="font-family:var(--mono)">BDE_THRESHOLD</span> env default.</p></div>
+  </div>
+  ${ck&&ck.argv_str ? `<h2>Will run</h2><div class="cmd">${esc(ck.argv_str)}</div>
+    <p style="font-size:12.5px;color:var(--ink-2);margin-top:8px">Shown because a flag that silently goes missing is the failure this prevents. It's also the line to paste into a bug report.</p>` : ''}
+  ${ck&&ck.check&&ck.check.windows_count ? `<div class="callout alarm" style="margin-top:12px">
+    <b>${fmt(ck.check.windows_count)} file(s) will route to the Windows queue.</b> They will NOT progress
+    until the Windows worker runs on the Windows VM:
+    <div class="cmd" style="margin-top:8px">python worker.py</div>
+    This UI can't start it — it's a different machine. Start it before or after submitting.</div>` : ''}
+  <p style="margin-top:16px">
+    <button class="btn pri" ${canSubmit()?'':'disabled'} onclick="submitRun()">Submit run</button>
+    <span class="why">${esc(submitWhy())}</span></p>
+  <details style="margin-top:26px"><summary style="cursor:pointer;color:var(--ink-2);font-size:13px">My documents aren't in a job/files layout yet — prepare one (copy)</summary>
+    ${stagingPanel()}</details>`;
+};
+
+function renderCheck(ck){
+  const v=ck.validate||{};
+  if(!v.ok) return `<p style="margin:8px 0 0;font-size:12.5px" class="bad">✕ ${(v.problems||['invalid']).map(esc).join(' · ')}</p>`;
+  if(ck.rescan){ const rs=ck.rescan;
+    return `<p style="margin:8px 0 0;font-size:12.5px" class="ok">✓ rescan of ${esc(rs.prior_name||'?')} —
+      ${rs.keep==null?'<span class="bad">prior inventory not found</span>':fmt(rs.keep)+' file(s) will enqueue (excluding '+esc((rs.exclude_lanes||[]).join(', '))+')'}
+      · ${v.protocol?'protocol ✓':'no protocol'}</p>`; }
+  const c=ck.check||{};
+  return `<p style="margin:8px 0 0;font-size:12.5px" class="ok">✓ ${fmt(c.files)} file(s)${c.truncated?' (capped)':''}
+    · ${(c.exts||[]).map(([e,n])=>esc(e)+' '+fmt(n)).join(' · ')}
+    · ${c.windows_count?('<b class="bad">'+fmt(c.windows_count)+' → Windows queue</b>'):'none to Windows'}
+    · ${v.protocol?'protocol ✓ ('+esc((v.protocol||'').split(/[\\\\/]/).pop())+')':'no protocol (optional)'}</p>`;
+}
+function canSubmit(){ const ck=ST.form.check; if(ST.lock||!ck||!ck.validate||!ck.validate.ok) return false;
+  if(ST.form.mode==='rescan') return !!(ck.rescan && ck.rescan.keep>0);
+  return !!(ck.check && ck.check.files>0); }
+function submitWhy(){ if(ST.lock) return 'a run is already active'; const ck=ST.form.check;
+  if(!ck) return 'press Check first';
+  if(!ck.validate||!ck.validate.ok) return 'fix the layout problem above';
+  if(ST.form.mode==='rescan') return (ck.rescan&&ck.rescan.keep>0)?'':'the rescan subset is empty';
+  return (ck.check&&ck.check.files>0)?'':'no files found'; }
+
+function stagingPanel(){
+  const s=ST.form.staging;
+  return `<div class="card" style="margin-top:10px">
+    <p style="font-size:12.5px;color:var(--ink-2);margin:0 0 10px">Creates <code>&lt;job dir&gt;/files/</code> and
+      <b>copies</b> your documents into it — never moves or deletes the source. The job dir must be under INPUT_MOUNT.</p>
+    <div class="row"><div><label class="f">Source documents folder</label>
+      <input class="mono" type="text" value="${esc(ST.form.stg_src||'')}" oninput="ST.form.stg_src=this.value"></div></div>
+    <div class="row" style="margin-top:10px">
+      <div><label class="f">New job directory (under INPUT_MOUNT)</label>
+        <input class="mono" type="text" value="${esc(ST.form.stg_dest||'')}" oninput="ST.form.stg_dest=this.value"></div>
+      <div><label class="f">Protocol file (optional)</label>
+        <input class="mono" type="text" value="${esc(ST.form.stg_proto||'')}" oninput="ST.form.stg_proto=this.value"></div>
+    </div>
+    <p style="margin:12px 0 0"><button class="btn" ${s&&!s.done?'disabled':''} onclick="stageStart()">Copy into files/</button>
+      ${s?`<span class="why">${s.error?('✕ '+esc(s.error)):s.done?('✓ copied '+fmt(s.copied)+' file(s)'):('copying '+fmt(s.copied)+'/'+fmt(s.total)+'…')}</span>`:''}</p>
+    ${s&&s.done&&!s.error?`<p style="margin:8px 0 0;font-size:12.5px">Done → set the job directory above to
+      <span style="font-family:var(--mono)">${esc(s.dest)}</span> and press Check.</p>`:''}
+  </div>`;
+}
+
+function activeBanner(){
+  const lk=ST.lock; if(!lk) return '';
+  return `<div class="callout ${lk.drained?'':'alarm'}" style="margin-bottom:16px">
+    <b>Active run:</b> ${esc(lk.run_id)} · job <span style="font-family:var(--mono)">${esc(lk.job_id)}</span>
+    · by ${esc(lk.user)} · ${lk.measured?(lk.open_count===0?'drained (0 open — safe to archive & reset)':fmt(lk.open_count)+' still pending/processing'):'store unreachable to measure'}
+    <p style="margin:8px 0 0"><button class="btn" onclick="ST.monitorJob='${esc(lk.job_id)}';go('monitor')">Monitor</button>
+      <button class="btn danger" onclick="resetProbe('${esc(lk.run_id)}')">Archive &amp; reset</button></p>
+    ${ST.reset&&ST.reset.runId===lk.run_id?resetPanel():''}</div>`;
+}
+function resetPanel(){
+  const R=ST.reset, r=R.resp||{};
+  if(r.ok) return `<div class="callout good" style="margin-top:10px"><b>✓ Archived ${fmt(r.archived)} row(s), then reset.</b>
+    Deleted ${fmt(r.deleted)} status row(s)${(r.other_jobs&&r.other_jobs.length)?' across '+(r.other_jobs.length+1)+' job(s)':''}; snapshot in
+    <span style="font-family:var(--mono)">${esc(r.archive_dir)}</span>. Lock released.</div>`;
+  let body='';
+  if(r.needs_override) body=`<div class="bad" style="font-weight:600">${esc(r.why)}</div>
+    <p style="margin:8px 0 0"><button class="btn danger" onclick="resetGo(true,'')">Override — reset without collecting</button></p>`;
+  else if(r.needs_typed) body=`<div>${esc(r.why)}${(r.other_jobs&&r.other_jobs.length)?'<br><b>Also destroys co-resident job(s):</b> '+r.other_jobs.map(esc).join(', ')+' — archived first.':''}</div>
+    <div style="margin-top:8px;max-width:460px"><input class="mono" type="text" placeholder="type: ${esc(r.confirm_token)}"
+      oninput="ST.reset.typed=this.value;var b=document.getElementById('resetgo');if(b)b.disabled=(this.value!=='${esc(r.confirm_token)}')"></div>
+    <p style="margin:8px 0 0"><button class="btn danger" id="resetgo" ${R.typed===r.confirm_token?'':'disabled'}
+      onclick="resetGo(false, ST.reset.typed)">Archive &amp; reset — discard ${fmt(r.total_rows)} row(s)</button></p>`;
+  else if(r.why) body=`<div class="bad">${esc(r.why)}</div>`;
+  return `<div class="callout" style="margin-top:10px">${body}</div>`;
+}
+
+S.build = () => {
+  const B=ST.build;
+  if(!B||!B.pf) return `<h1>Build &amp; deploy</h1><p class="sub">Checking az, git, and targets…</p>
+    <div class="card">Running preflight… <button class="btn" onclick="loadBuild()">Refresh</button></div>`;
+  const pf=B.pf, t=pf.targets||{}, sha=pf.sha;
+  const img=(t.ACR_REGISTRY&&t.ACR_IMAGE)?`${t.ACR_REGISTRY}.azurecr.io/${t.ACR_IMAGE}`:'(set ACR_REGISTRY / ACR_IMAGE)';
+  const ready = pf.can_build && pf.can_deploy;
+  return `<h1>Build &amp; deploy</h1>
+  <p class="sub">Readiness only — run the actual build/deploy from a terminal on this VM (commands below).
+    ${ready?'<b class="ok">Environment looks ready.</b>':'<b class="warn">Some checks need attention.</b>'}
+    <button class="btn" style="padding:2px 10px;font-size:12px;margin-left:8px" onclick="loadBuild()">Re-check</button></p>
+  <div class="card">${pf.checks.map(r=>`<div class="chk">
+    <div class="ic ${r.state}">${r.state==='ok'?'✓':r.state==='warn'?'!':'✕'}</div>
+    <div class="k">${esc(r.key)}</div><div class="v">${esc(r.val)}${r.detail?`<div class="detail">${esc(r.detail)}</div>`:''}</div></div>`).join('')}</div>
+
+  <h2>Target</h2>
+  <div class="row">
+    ${monoTile('Image', esc(img), 'tag defaults to '+esc(sha||'latest'))}
+    ${monoTile('Container App', esc(t.AZURE_CONTAINER_APP||'—'), esc(t.AZURE_RESOURCE_GROUP||''))}
+    ${tile('What workers run now', '—', 'see Setup: deployed-tag vs this SHA')}
+  </div>
+
+  <h2>Run these from the CLI</h2>
+  <div class="card">
+    <p style="font-size:12.5px;color:var(--ink-2);margin:0 0 10px">Build &amp; deploy happen in a terminal on this VM — they change what every worker runs, so they're deliberately not buttons here. The env above supplies the registry / image / app.</p>
+    <div class="cmd">scaling-lib acr-release            # build + push + deploy (most common)
+scaling-lib acr-build              # build + push only
+scaling-lib acr-deploy --tag ${esc(sha||'<sha>')}    # deploy an existing image</div>
+  </div>`;
+};
+
+function renderTable(rows){
+  if(!rows||!rows.length) return '';
+  const head=rows[0], body=rows.slice(1,400);
+  return `<div class="tblwrap" style="margin-top:10px"><table><thead><tr>${head.map(h=>`<th>${esc(h)}</th>`).join('')}</tr></thead>
+    <tbody>${body.map(r=>`<tr>${r.map(c=>`<td>${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody></table>
+    ${rows.length>401?`<p style="font-size:12px;color:var(--ink-3);margin:8px 0 0">showing first 400 of ${fmt(rows.length-1)} rows</p>`:''}</div>`;
+}
+
+/* ---------------------------------------------------------------- actions */
+const DEF = () => ST.ctx?.defaults || {price_per_1k_pages:9.5,price_per_1k_in:0.0003,price_per_1k_out:0.0003};
+
+async function open_(id){
+  ST.runId=id; ST.out=null;
+  ST.run = await api('/api/run?id='+encodeURIComponent(id));
+  go('results');
+}
+async function collectRun(){
+  ST.out={out:'collecting worker outputs…'}; draw();
+  ST.out = await api('/api/collect',{id:ST.runId});
+  if(ST.out && ST.out.ok){
+    ST.run = await api('/api/run?id='+encodeURIComponent(ST.runId));   // re-fetch so the inventory renders
+    ST.runs = (await api('/api/runs')).runs||[];
+    await loadLock();
+  }
+  draw();
+}
+async function report(){
+  ST.out={out:'building Table 1…'}; draw();
+  ST.out = await api('/api/report',{id:ST.runId}); draw();
+}
+async function sample(){
+  ST.out={out:'drawing sample…'}; draw();
+  ST.out = await api('/api/sample',{id:ST.runId, rate:0.05, seed:12345}); draw();
+}
+async function score(){
+  const g=$('#gold')?.value||'';
+  if(!g) return alert('Give the path to the entities export first.');
+  ST.out={out:'scoring… (this runs the full scorecard — may take a moment)'}; draw();
+  ST.out = await api('/api/score',{id:ST.runId, entities:g,
+    id_col:$('#idc')?.value||'', count_col:$('#cc')?.value||'', sheet:$('#sh')?.value||'',
+    bde_threshold:$('#bthr')?.value||'', absent_means:$('#absent')?.value||'auto'});
+  draw();
+}
+async function compare(){
+  const a=$('#cmpA').value, b=$('#cmpB').value;
+  if(a===b) return alert('Pick two different runs.');
+  ST.out={out:'comparing…'}; draw();
+  ST.out = await api('/api/compare',{a,b}); draw();
+}
+function copyRow(){
+  const s=ST.run?.summary; if(!s) return;
+  const o=s.ocr||{}, t=s.tokens||{}, c=s.cost||{};
+  const row=[ST.run.meta.name||ST.run.meta.id, s.files, o.di_pages_billable, o.di_calls,
+             t.total, t.stage1, t.stage2, c.di_usd, c.llm_usd, c.total_usd].join('\t');
+  navigator.clipboard?.writeText(row);
+  alert('Copied one tab-separated row for the cost log:\n\n'+row);
+}
+
+async function checkRun(){
+  const f=ST.form;
+  f.check={validate:{ok:false},_loading:true}; draw();
+  f.check = await api('/api/newrun/check', {job_dir:f.job_dir||'', mode:f.mode||'job',
+    run_id:f.run_id||'', exclude_lanes:f.exclude_lanes||'', no_count:false, bde_threshold:f.bde_threshold||''});
+  if(ST.screen==='new') draw();
+}
+async function submitRun(){
+  const f=ST.form;
+  const r = await api('/api/newrun/submit', {job_dir:f.job_dir||'', mode:f.mode||'job',
+    name:f.name||'', run_id:f.run_id||'', exclude_lanes:f.exclude_lanes||'', bde_threshold:f.bde_threshold||''});
+  if(!r.ok){ if(r.active) await loadLock(); alert(r.why||'submit failed'); draw(); return; }
+  ST.monitorJob=r.job_id; await loadLock(); ST.runs=(await api('/api/runs')).runs||[];
+  if(r.windows_count) alert(fmt(r.windows_count)+' file(s) went to the Windows queue — start `python worker.py` on the Windows VM or they will not progress.');
+  go('monitor');
+}
+async function stageStart(){
+  const f=ST.form;
+  const r = await api('/api/stage/start', {src:f.stg_src||'', dest_job_dir:f.stg_dest||'', protocol_src:f.stg_proto||''});
+  if(!r.ok){ alert((r.problems||['could not start']).join('; ')); return; }
+  f.staging={total:r.total, copied:0, done:false, files_dir:r.files_dir, dest:f.stg_dest}; draw();
+  stagePoll(r.id);
+}
+async function stagePoll(id){
+  const s = await api('/api/stage/status?id='+encodeURIComponent(id));
+  ST.form.staging = s; if(ST.screen==='new') draw();
+  if(s && !s.done) setTimeout(()=>stagePoll(id), 700);
+}
+async function resetProbe(runId){ ST.reset={runId, override:false, typed:''};
+  ST.reset.resp = await api('/api/reset',{id:runId}); draw(); }
+async function resetGo(override, typed){
+  ST.reset.override = ST.reset.override || override;
+  ST.reset.resp = await api('/api/reset',{id:ST.reset.runId, override:ST.reset.override, typed:typed||''});
+  if(ST.reset.resp && ST.reset.resp.ok){ await loadLock(); ST.runs=(await api('/api/runs')).runs||[]; }
+  draw();
+}
+
+async function loadBuild(){
+  // status only — build/deploy are run from the CLI (no execution endpoints in this UI)
+  ST.build = ST.build || {};
+  ST.build.pf = await api('/api/build/preflight');
+  if(ST.screen==='build') draw();
+}
+
+async function loadSetup(){
+  ST.setup=null; draw();
+  ST.setup = await api('/api/setup');
+  if(ST.screen==='setup') draw();
+}
+async function loadMonitor(){
+  const m = await api('/api/monitor'+(ST.monitorJob?('?id='+encodeURIComponent(ST.monitorJob)):''));
+  const winN = ((m.queues&&m.queues.counts)||{}).windows_queue_count;
+  if(ST.winTrack && ST.winTrack.count===winN){ ST.winTrack.staticSecs += 3; }
+  else { ST.winTrack = {count:winN, staticSecs:0}; }
+  ST.monitor = m; if(m && m.job_id) ST.monitorJob = m.job_id;
+  if(ST.screen==='monitor') draw();
+  clearTimeout(ST.poll);
+  const terminal = m && m.error==null && m.total>0 && m.files_pending===0 && m.files_processing===0;
+  if(ST.screen==='monitor' && !terminal) ST.poll = setTimeout(loadMonitor, 3000);
+  // When a run finishes, jump straight to Results (once per job) so the operator
+  // can collect and save the inventory CSV without hunting for the screen.
+  if(ST.screen==='monitor' && terminal && ST.autoResultsFor!==ST.monitorJob){
+    ST.autoResultsFor = ST.monitorJob;
+    const run = (ST.runs||[]).find(r=>r.job_id===ST.monitorJob);
+    if(run) open_(run.id);
+  }
+}
+
+/* ---------------------------------------------------------------- shell */
+function draw(){
+  $('#nav').innerHTML = NAV.map(([k,l],i)=>`<li><button aria-current="${ST.screen===k}"
+    onclick="go('${k}')"><span class="num">${i+1}</span>${l}</button></li>`).join('');
+  $('#main').innerHTML = S[ST.screen]();
+}
+(async ()=>{
+  ST.ctx = await api('/api/context');
+  $('#verline').textContent = 'Scaled · '+(ST.ctx.env_loaded?(ST.ctx.env_loaded+' settings'):'no .env');
+  $('#sidenote').textContent = ST.ctx.root;
+  ST.runs = (await api('/api/runs')).runs || [];
+  try { ST.lock = (await api('/api/lock')).active; } catch(e) {}
+  draw();
+  if(ST.screen==='setup') loadSetup();
+})();
+</script>
+</body>
+</html>

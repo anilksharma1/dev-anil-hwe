@@ -1,0 +1,46 @@
+# pii_triage optional dependencies.
+# The package runs on the standard library alone; each library widens format
+# coverage. Missing libraries degrade gracefully (affected files are recorded
+# as 'no_parser' / 'needs_conversion', never silently skipped).
+
+pypdf>=4.0          # PDF text + image-only (OCR-needed) detection
+python-docx>=1.1    # .docx / .docm (stdlib zip fallback if absent)
+python-pptx>=0.6    # .pptx / .pptm (stdlib zip fallback if absent)
+openpyxl>=3.1       # .xlsx / .xlsm
+extract-msg>=0.48   # .msg
+xlrd>=2.0           # legacy .xls
+striprtf>=0.0.26    # .rtf (stdlib regex fallback if absent)
+PyYAML>=6.0         # only needed for YAML rule packs (JSON works without it)
+
+# Legacy binary .doc additionally needs a converter on PATH:
+#   antiword  (apt-get install antiword)  or  catdoc
+# Without one, .doc files are flagged needs_conversion.
+
+# OPTIONAL and OFF by default. Name detection uses a zero-install heuristic unless
+# you pass --ner AND spaCy + its model are present. Only bundle this if your VM
+# can host it; the tool needs none of it to run:
+#   pip install spacy && python -m spacy download en_core_web_sm
+
+# OPTIONAL Azure enrichment (only if you use --ocr / --llm). On a locked-down VM
+# that blocks public PyPI, have IT pre-install these (or use an internal mirror /
+# offline wheels). If absent, --ocr / --llm warn and the scan proceeds rules-only.
+#   azure-ai-documentintelligence>=1.0   # --ocr (Document Intelligence, prebuilt-layout)
+#   openai>=1.40                         # --llm (Azure OpenAI client)
+#   azure-identity>=1.17                 # DefaultAzureCredential
+#   azure-keyvault-secrets>=4.8          # only if endpoints come from Key Vault
+
+# Pillow is required by pypdf for embedded-image extraction
+# (_pdf_extract_content_images -> img.image). Without it EVERY content image is
+# silently skipped and apply_image_ocr becomes a no-op -- which is exactly what
+# happened in Daniel's run (0 embedded-image OCR calls vs Anna's 24,223).
+Pillow>=10.0
+
+# Test runner (was undeclared; the suite is unittest-based but run under pytest)
+pytest>=8.0
+
+# Test-only. Builds real PDFs on the fly for three tests that would otherwise SKIP -- and
+# they are not incidental tests: they cover the OCR routing decision itself (an
+# image-dominated PDF must go to OCR; a letterhead logo must NOT) plus AcroForm field
+# extraction, which is how an SSN typed into a fillable form gets seen at all. Pure Python,
+# no compiled dependencies.
+reportlab>=4.0

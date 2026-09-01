@@ -1,0 +1,81 @@
+{
+  "started_at": "2026-08-05T20:18:20",
+  "root": "I:\\CNG_Data\\files",
+  "grand_total_files": 208173,
+  "completed": 31,
+  "newly_scanned": 31,
+  "resumed": false,
+  "interrupted": true,
+  "elapsed_s": 76.0,
+  "status_counts": {
+    "ok": 31,
+    "bde": 1
+  },
+  "lane_counts": {
+    "standard": 5,
+    "likely_non_responsive": 25,
+    "structured_bde": 1
+  },
+  "llm_stats": {
+    "tokens": 0,
+    "ambiguous": 9,
+    "would_call": 9
+  },
+  "ocr_stats": {
+    "would_docling_files": 22,
+    "would_docling_pages": 0
+  },
+  "config": {
+    "root": "I:\\CNG_Data\\files",
+    "rulepack": {
+      "name": "default",
+      "version": "2.3",
+      "entities": [
+        "NAME",
+        "ADDRESS",
+        "EMAIL",
+        "PHONE",
+        "SSN",
+        "PASSPORT",
+        "DRIVER_LICENSE",
+        "TIN",
+        "NATIONAL_ID",
+        "ALIEN_REG",
+        "MILITARY_ID",
+        "TRIBAL_ID",
+        "DOB",
+        "BIRTH_CERT",
+        "CARD",
+        "BANK_ACCOUNT",
+        "CARD_DETAIL",
+        "CARD_REF",
+        "FIN_BALANCE",
+        "MONEY",
+        "CREDENTIALS",
+        "HEALTH",
+        "BIOMETRIC",
+        "FAMILY",
+        "DEMOGRAPHIC",
+        "STUDENT_ID",
+        "WORK"
+      ]
+    },
+    "bde_threshold": 51,
+    "use_ner": false,
+    "use_ocr": true,
+    "use_llm": true,
+    "dry_run": true,
+    "llm_deployment": "",
+    "doc_intel_model": "prebuilt-layout",
+    "protocol_text": "",
+    "jurisdiction": "",
+    "timeout_s": 120,
+    "max_bytes": 1073741824,
+    "max_scan_chars": 5000000,
+    "llm_input_chars": 24000,
+    "max_scan_rows": 200000,
+    "zip_ratio_limit": 200,
+    "ocr_page_density_threshold": 50
+  },
+  "tool_version": "2.9.9"
+}

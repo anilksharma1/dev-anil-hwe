@@ -1,0 +1,187 @@
+# Reference Master List for pii_triage (mirrors the built-in default).
+# Copy and edit, then pass with --rulepack. Partial packs inherit unspecified keys.
+
+name: default
+version: '2.2'
+bde_threshold: 51
+bucket_edges:
+- 10
+- 20
+- 50
+- 100
+entities:
+- key: NAME
+  label: Name
+  category: ''
+  method: name
+  per_person: true
+- key: ADDRESS
+  label: Address
+  category: Contact Information
+  method: address
+- key: EMAIL
+  label: Email
+  category: Contact Information
+  method: regex
+  per_person: true
+  casefold: true
+  patterns:
+  - \b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b
+- key: PHONE
+  label: Phone
+  category: Contact Information
+  method: regex
+  per_person: true
+  patterns:
+  - (?<!\d)(?:\+?1[-.\s]?)?(?:\(\d{3}\)|\d{3})[-.\s]?\d{3}[-.\s]?\d{4}(?!\d)
+- key: SSN
+  label: SSN
+  category: Government-Issued Identification
+  method: ssn
+  per_person: true
+  patterns: []
+- key: PASSPORT
+  label: Passport
+  category: Government-Issued Identification
+  method: labeled_value
+  label_pattern: passport(?:\s*(?:no\.?|number|num|#))?
+  value_pattern: '[A-Za-z0-9][A-Za-z0-9-]{4,16}'
+  min_digits: 4
+  window: 30
+- key: DRIVER_LICENSE
+  label: Driver License
+  category: Government-Issued Identification
+  method: labeled_value
+  label_pattern: driver'?s?\s*licen[sc]e(?:\s*(?:no\.?|number|#))?|\bdl\s*(?:no\.?|number|#)
+  value_pattern: '[A-Za-z0-9][A-Za-z0-9-]{4,16}'
+  min_digits: 4
+  window: 30
+- key: TIN
+  label: Tax ID
+  category: Government-Issued Identification
+  method: labeled_value
+  label_pattern: taxpayer\s*id(?:entification)?(?:\s*(?:no\.?|number))?|\btin\b|tax\s*id(?:entification)?(?:\s*(?:no\.?|number))?
+  value_pattern: \d{2}-?\d{7}|\d{9}
+  min_digits: 9
+  window: 25
+- key: NATIONAL_ID
+  label: National/NI Number
+  category: Government-Issued Identification
+  method: labeled_value
+  label_pattern: national\s*(?:insurance|id)(?:\s*(?:no\.?|number|#))?|\bnino\b|social\s*insurance(?:\s*(?:no\.?|number))?
+  value_pattern: '[A-Z]{2}\d{6}[A-D]|[A-Za-z0-9-]{6,12}'
+  min_digits: 6
+  window: 25
+- key: ALIEN_REG
+  label: Alien Registration
+  category: Government-Issued Identification
+  method: keyword
+  patterns:
+  - \b(?:alien registration|a-?number|uscis)\b
+- key: MILITARY_ID
+  label: Military ID
+  category: Government-Issued Identification
+  method: keyword
+  patterns:
+  - \b(?:military id|\bdod id\b|service number)\b
+- key: TRIBAL_ID
+  label: Tribal ID
+  category: Government-Issued Identification
+  method: keyword
+  patterns:
+  - \btribal id\b
+- key: DOB
+  label: Date of Birth
+  category: Birth Information
+  method: labeled_value
+  label_pattern: date\s*of\s*birth|d\.?o\.?b\.?|born(?:\s*on)?|birth\s*date
+  value_pattern: \d{1,2}[/-]\d{1,2}[/-]\d{2,4}|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2},?\s+\d{4}
+  min_digits: 0
+  window: 25
+- key: BIRTH_CERT
+  label: Birth Certificate
+  category: Birth Information
+  method: keyword
+  patterns:
+  - \bbirth certificate\b
+- key: CARD
+  label: Payment Card
+  category: Financial Account Information
+  method: regex
+  per_person: true
+  luhn: true
+  patterns:
+  - \b(?:\d[ -]?){13,19}\b
+- key: BANK_ACCOUNT
+  label: Bank/Account Number
+  category: Financial Account Information
+  method: labeled_value
+  label_pattern: account\s*(?:no\.?|number|#)|\biban\b|routing\s*(?:no\.?|number)?|sort\s*code|loan\s*(?:no\.?|number)
+  value_pattern: '[A-Z]{2}\d{2}[A-Z0-9]{10,30}|\d{6,17}'
+  min_digits: 6
+  window: 30
+- key: CARD_DETAIL
+  label: Card Expiry/CVV
+  category: Financial Account Information
+  method: keyword
+  patterns:
+  - \b(?:cvv|cvc|security code|expiration date|exp\.? date)\b
+- key: CARD_REF
+  label: Card/Transaction
+  category: Financial Account Information
+  method: keyword
+  patterns:
+  - \b(?:amex|american express|master\s?card|credit card|debit card|card ending|card number)\b
+- key: FIN_BALANCE
+  label: Account Balance
+  category: Financial Account Information
+  method: keyword
+  patterns:
+  - \b(?:account balance|available balance)\b
+- key: CREDENTIALS
+  label: Credentials
+  category: Access Credentials
+  method: keyword
+  patterns:
+  - \bpassword\b
+  - \b(?:security question|security answer)\b
+  - \bpin\s*(?:number|code|:)\b
+- key: HEALTH
+  label: Health
+  category: Health-Related Information
+  method: keyword
+  patterns:
+  - \b(?:diagnos\w*|medical history|mental or physical|treatment|prescription|patient|symptom)\b
+  - \b(?:insurance policy|policy number|subscriber id|claim number|health insurance)\b
+- key: BIOMETRIC
+  label: Biometric
+  category: Biometric Data
+  method: keyword
+  patterns:
+  - \b(?:fingerprint|voice ?print|genetic print|retina|iris (?:scan|image)|dna profile)\b
+- key: FAMILY
+  label: Family
+  category: Family Information
+  method: keyword
+  patterns:
+  - \b(?:mother'?s maiden name|maiden name|marriage certificate)\b
+- key: DEMOGRAPHIC
+  label: Demographic
+  category: Demographic Information
+  method: keyword
+  patterns:
+  - \b(?:race/?ethnicity|ethnicity|sexual orientation|religion|religious|criminal conviction|trade union)\b
+- key: STUDENT_ID
+  label: Student ID
+  category: Student-Related Information
+  method: keyword
+  patterns:
+  - \bstudent id\b
+  - \bstudent identification\b
+- key: WORK
+  label: Work-Related
+  category: Work-Related Information
+  method: keyword
+  patterns:
+  - \b(?:employee id|employee number|salary|compensation|disciplinary|performance evaluation|workers'?
+    comp|employment application)\b

@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>pii_triage — Demo Day</title>
+
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/theme/white.css" id="theme">
+
+<style>
+  :root{
+    --blue:#2a78d6;      /* stage-1 / Document Intelligence */
+    --orange:#eb6834;    /* stage-2 / LLM */
+    --track:#b7d3f6;
+    --ink:#1a1f24;
+    --ink-2:#52514e;
+    --ink-3:#7b7a75;
+    --dark:#232a31;      /* the UI sidebar */
+    --good:#0ca30c;
+    --warn:#fab219;
+    --crit:#d03b3b;
+    --rule:#e3e4e2;
+  }
+  .reveal{ font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; color:var(--ink); }
+  .reveal h1,.reveal h2,.reveal h3{ font-weight:700; text-transform:none; letter-spacing:-.01em; color:var(--ink); }
+  .reveal h1{ font-size:2.1em; }
+  .reveal h2{ font-size:1.5em; }
+  .reveal section{ text-align:left; }
+  .reveal .center{ text-align:center; }
+  .reveal p,.reveal li{ color:var(--ink-2); }
+  .reveal strong{ color:var(--ink); }
+  .reveal em{ color:var(--ink-3); font-style:normal; }
+  .reveal .sub{ color:var(--ink-3); font-size:.62em; margin-top:-.2em; }
+  .reveal a{ color:var(--blue); }
+
+  /* kicker label above titles */
+  .kick{ display:inline-block; font-size:.4em; letter-spacing:.14em; text-transform:uppercase;
+         color:var(--blue); font-weight:700; margin-bottom:.4em; }
+
+  /* accent bar */
+  .bar{ height:6px; width:88px; background:var(--blue); border-radius:4px; margin:.2em 0 .6em; }
+  .bar.o{ background:var(--orange); }
+
+  /* the no-PII guarantee callout */
+  .guarantee{ background:var(--dark); color:#eef2f5; border-radius:12px; padding:.7em 1em;
+              font-size:.95em; }
+  .guarantee b{ color:#fff; }
+
+  /* pills / chips */
+  .pill{ display:inline-block; border:1px solid var(--rule); border-radius:999px;
+         padding:.12em .6em; font-size:.5em; color:var(--ink-2); margin:.12em; background:#fafbfc; }
+  .pill.b{ border-color:var(--blue); color:var(--blue); }
+  .pill.o{ border-color:var(--orange); color:var(--orange); }
+
+  /* card grid */
+  .grid{ display:grid; gap:.7em; }
+  .g2{ grid-template-columns:1fr 1fr; }
+  .g3{ grid-template-columns:1fr 1fr 1fr; }
+  .g4{ grid-template-columns:repeat(4,1fr); }
+  .card{ border:1px solid var(--rule); border-radius:10px; padding:.7em .8em; background:#fff; }
+  .card .n{ font-size:.55em; color:var(--ink-3); text-transform:uppercase; letter-spacing:.06em; }
+  .card .v{ font-size:1.0em; font-weight:700; color:var(--ink); }
+  .card.blue{ border-top:4px solid var(--blue); }
+  .card.orange{ border-top:4px solid var(--orange); }
+
+  .reveal table{ font-size:.62em; }
+  .reveal table th{ color:var(--ink-3); font-weight:600; border-bottom:2px solid var(--rule); }
+  .reveal table td{ border-bottom:1px solid var(--rule); }
+  code{ background:#f2f4f6; padding:.05em .35em; border-radius:5px; color:var(--dark); font-size:.9em; }
+
+  .flow{ font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.5em; line-height:1.55;
+         background:#f7f9fb; border:1px solid var(--rule); border-radius:10px; padding:1em 1.2em; color:var(--ink-2); }
+  .flow .lane{ color:var(--blue); font-weight:700; }
+  .flow .exit{ color:var(--orange); font-weight:700; }
+
+  .lead{ font-size:1.15em; color:var(--ink); }
+  .muted{ color:var(--ink-3); }
+  .reveal ul{ margin-left:1em; }
+  .reveal li{ margin:.28em 0; }
+
+  .footer{ position:fixed; bottom:12px; left:20px; font-size:12px; color:var(--ink-3); z-index:20; }
+  .reveal .slide-number{ background:transparent; color:var(--ink-3); }
+
+  .metric{ display:flex; align-items:baseline; gap:.5em; }
+  .metric .big{ font-size:1.6em; font-weight:800; color:var(--blue); }
+  .metric.o .big{ color:var(--orange); }
+  .metric.crit .big{ color:var(--crit); }
+</style>
+</head>
+<body>
+<div class="footer">pii_triage v3.0.0 · HWE Bucketing &amp; Tagging · Demo Day</div>
+<div class="reveal"><div class="slides">
+
+<!-- 1 · TITLE -->
+<section data-background-color="#232a31">
+  <div class="center" style="color:#eef2f5">
+    <div class="kick" style="color:#7fb2ee">HWE · Bucketing &amp; Tagging Stage</div>
+    <h1 style="color:#fff; font-size:2.6em; margin:.1em 0">pii_triage</h1>
+    <p style="color:#c7ced4; font-size:1.05em">Scan a corpus for PII. Route every file. Never store a value.</p>
+    <p style="color:#8b95a0; font-size:.7em; margin-top:1.4em">
+      <span class="pill" style="border-color:#3a4652; color:#9fb2c7">v3.0.0</span>
+      <span class="pill" style="border-color:#3a4652; color:#9fb2c7">local CLI + Azure fleet</span>
+      <span class="pill" style="border-color:#3a4652; color:#9fb2c7">live UI demo to follow →</span>
+    </p>
+  </div>
+  <aside class="notes">
+    Welcome. This is pii_triage — the Bucketing &amp; Tagging stage of our HWE pipeline. In the next ~10 minutes I'll cover the problem, how it works, how it scales, and how we prove it's accurate. Then I'll hand off to a live demo of the operator UI. One sentence to anchor everything: we scan a corpus for PII, route every file to the right lane, and we never store a single PII value.
+  </aside>
+</section>
+
+<!-- 2 · THE PROBLEM -->
+<section>
+  <span class="kick">The problem</span>
+  <div class="bar"></div>
+  <h2>A matter arrives with hundreds of thousands of files</h2>
+  <p class="lead">Someone has to decide, for <em>every</em> file: does it contain personal information, how much, and where should it go?</p>
+  <div class="grid g3" style="margin-top:.7em">
+    <div class="card"><div class="n">Too big to read</div><div class="v">100k+ files</div><div class="muted" style="font-size:.55em">every format — email, Office, PDF, images, archives</div></div>
+    <div class="card"><div class="n">Manual review is slow</div><div class="v">$$ &amp; weeks</div><div class="muted" style="font-size:.55em">and inconsistent between reviewers</div></div>
+    <div class="card"><div class="n">The risk is asymmetric</div><div class="v">a missed responsive file</div><div class="muted" style="font-size:.55em">is the failure mode that matters</div></div>
+  </div>
+  <p style="margin-top:.7em"><strong>pii_triage does the first pass automatically</strong> — so humans only review what actually needs judgement.</p>
+  <aside class="notes">
+    The setup: a legal matter lands with a huge corpus. Every file needs a decision — is there PII, how much, and where does it route. Doing that by hand is slow, expensive, and inconsistent. And the costliest mistake isn't over-flagging — it's *missing* a responsive file. pii_triage automates the first pass so reviewers spend their time only on the ambiguous middle.
+  </aside>
+</section>
+
+<!-- 3 · WHAT IT DOES + GUARANTEE -->
+<section>
+  <span class="kick">What it produces</span>
+  <div class="bar"></div>
+  <h2>One inventory row per file — counts and a label, nothing else</h2>
+  <div class="grid g2" style="margin:.5em 0">
+    <div class="card blue"><div class="n">Table 1 — searchable files</div><div class="v">per-file detail</div><div class="muted" style="font-size:.55em">entity-type counts + routing lane, ready for downstream</div></div>
+    <div class="card orange"><div class="n">Table 2 — non-searchable</div><div class="v">sample → review → extrapolate</div><div class="muted" style="font-size:.55em">stratified 5% sample, humans code it, we project to the population</div></div>
+  </div>
+  <div class="guarantee">
+    🔒 <b>The one hard guarantee:</b> no PII value is ever stored, logged, or output.
+    Detection counts occurrences into a local set that is <b>discarded on return</b>.
+    Only entity <b>type counts</b> and a <b>routing label</b> ever leave the process.
+  </div>
+  <aside class="notes">
+    The output is deliberately boring: one row per file, holding entity-type *counts* and a routing *label*. That feeds two deliverables — Table 1 for searchable files, and Table 2 for non-searchable files, which we sample, have humans review, and extrapolate. And the guarantee that shapes every design decision: we never store a PII value. We count occurrences into a set that's thrown away when the function returns. Only counts and labels survive. This is what lets us run it anywhere without creating a new data-exposure risk.
+  </aside>
+</section>
+
+<!-- 4 · THE PIPELINE -->
+<section>
+  <span class="kick">How it works</span>
+  <div class="bar"></div>
+  <h2>Every file runs one decision tree</h2>
+  <div class="flow">
+file_path
+  │  size &gt; cap ───────────────────────────────► <span class="exit">manual_oversize</span>
+  ▼  <b>extract</b> text + metadata (read-only, 25+ formats)
+  │  unsupported / error / container / legacy ──► <span class="exit">needs_parser · review_error · container_expand · convert_lane</span>
+  ▼  image-only? ── +OCR ─► Document Intelligence ─┐   no OCR ─► <span class="exit">nonsearchable_sample</span>
+  ▼  <b>detect</b> entities by type  <em>(values discarded)</em>            ◄────────────────┘
+  ▼  <b>classify ambiguity</b>
+  │  no signals ────────────────────────────────► <span class="exit">likely_non_responsive</span>
+  │  strong id (SSN…) ─► skip LLM
+  │  ambiguous ─► <b>Azure OpenAI</b> grades responsiveness
+  ▼  <b>route</b> to a final lane
+     spreadsheet ≥ threshold ─► <span class="lane">structured_bde</span>
+     entities ≥ threshold ─────► <span class="lane">bde</span>
+     entities &lt; threshold ─────► <span class="lane">standard</span>
+  </div>
+  <p class="sub">Early exits assign a lane and stop. The LLM is consulted <em>only</em> on genuinely ambiguous files — never when the answer is already clear. 10 lanes total.</p>
+  <aside class="notes">
+    Here's the whole engine on one slide. Every file walks the same tree. We short-circuit early: too big, unsupported, an archive, a legacy format — each gets its own lane and stops. If it's an image and OCR is on, we run Azure Document Intelligence; if OCR is off, it goes to the non-searchable sample. Then we detect entities — and immediately discard the values. Then the key move: we classify *ambiguity*. If there are no signals, it's non-responsive. If there's a strong identifier like an SSN, it's clearly responsive and we skip the LLM entirely. Only the genuinely ambiguous middle gets sent to Azure OpenAI for a graded call. Finally we route to a final lane. The whole point is: cheap, deterministic rules handle the clear cases; the expensive model only runs where it earns its keep.
+  </aside>
+</section>
+
+<!-- 5 · DETECTION + LANES -->
+<section>
+  <span class="kick">Detection &amp; routing</span>
+  <div class="bar"></div>
+  <div class="grid g2">
+    <div>
+      <h3 style="font-size:1.05em">8 detection methods</h3>
+      <table>
+        <tr><th>Method</th><th>Finds</th></tr>
+        <tr><td><code>regex</code></td><td>email, phone, card <em>(+Luhn)</em></td></tr>
+        <tr><td><code>ssn</code></td><td>SSN <em>(validated)</em></td></tr>
+        <tr><td><code>name</code></td><td>names <em>(heuristic / NER)</em></td></tr>
+        <tr><td><code>address</code></td><td>street / city-state-zip</td></tr>
+        <tr><td><code>labeled_value</code></td><td>passport, license, DOB</td></tr>
+        <tr><td><code>keyword</code></td><td>health, biometric</td></tr>
+        <tr><td><code>money</code></td><td>currency amounts</td></tr>
+      </table>
+      <p class="sub">Against an 11-category Master List (rulepack) — definitions, never values.</p>
+    </div>
+    <div>
+      <h3 style="font-size:1.05em">10 routing lanes</h3>
+      <p><span class="pill b">standard</span><span class="pill b">bde</span><span class="pill b">structured_bde</span>
+      <span class="pill">likely_non_responsive</span><span class="pill o">nonsearchable_sample</span>
+      <span class="pill">container_expand</span><span class="pill">convert_lane</span>
+      <span class="pill">needs_parser</span><span class="pill">manual_oversize</span><span class="pill">review_error</span></p>
+      <div class="card" style="margin-top:.6em">
+        <div class="n">BDE = "big data entity"</div>
+        <div class="muted" style="font-size:.62em">Files with a lot of PII (default ≥ 51 entities). The threshold is configurable per run and per score.</div>
+      </div>
+    </div>
+  </div>
+  <aside class="notes">
+    Two pieces of vocabulary for later. On the left: eight detection methods — regex for structured stuff like emails and cards with a Luhn check, a validated SSN detector, name and address detection, labeled values like passports, keyword matching for health and biometric topics, and money. All of it driven by a configurable Master List rulepack that holds *definitions*, not values. On the right: the ten lanes a file can land in. The three blue ones are the responsive searchable outcomes. "BDE" — big data entity — just means a file with a lot of PII, default threshold 51, and that threshold is tunable. Keep "responsive," "BDE," and "lanes" in your head — they'll show up in the demo.
+  </aside>
+</section>
+
+<!-- 6 · SCALE -->
+<section>
+  <span class="kick">Scale</span>
+  <div class="bar o"></div>
+  <h2>Same engine, two ways to run it</h2>
+  <div class="grid g2" style="margin-top:.4em">
+    <div class="card blue">
+      <div class="n">Local — one machine</div>
+      <div class="v">CLI, multiprocessing</div>
+      <p class="muted" style="font-size:.6em"><code>python -m pii_triage scan /corpus …</code><br>
+      The output CSV <em>is</em> the progress record — crash-safe resume, idempotent.</p>
+    </div>
+    <div class="card orange">
+      <div class="n">Scaled — Azure fleet</div>
+      <div class="v">Container Apps + Storage Queue</div>
+      <p class="muted" style="font-size:.6em">~21 Linux workers poll a queue, one file each, autoscaling with queue depth. A Windows worker handles legacy Office (<code>.doc/.xls/.ppt</code>) via COM.</p>
+    </div>
+  </div>
+  <div class="guarantee" style="margin-top:.7em; font-size:.85em">
+    Built on <b>scaling-lib</b> — polling, retries, rate-limited AI clients, dead-lettering, status table, autoscaling.
+    A matter is <code>&lt;job_dir&gt;/files/</code> + a sibling <code>protocol.pdf</code> the workers pick up automatically.
+  </div>
+  <aside class="notes">
+    The same code runs two ways. Locally it's a multiprocess CLI, and the neat trick is that the output CSV *is* the progress record — if it crashes, you re-run and it skips finished rows. At scale it's a fleet of Docker workers on Azure Container Apps, each pulling one file off a Storage Queue, autoscaling with the backlog. Legacy Office files that need Win32 COM conversion route to a dedicated Windows worker. All the plumbing — retries, rate limiting, dead-lettering, status tracking — comes from scaling-lib, so we don't reinvent it. And each matter is just a folder of files plus an optional protocol document the workers read automatically.
+  </aside>
+</section>
+
+<!-- 7 · DATA INTEGRITY -->
+<section>
+  <span class="kick">Why you can trust the numbers</span>
+  <div class="bar"></div>
+  <h2>Integrity is designed in, not asserted</h2>
+  <div class="grid g2">
+    <div class="card"><div class="n">Deterministic rules pass</div><div class="v">byte-identical across runs</div><div class="muted" style="font-size:.58em">A file decided <em>without</em> a model call must produce the exact same row every time. The <b>Compare</b> screen proves it.</div></div>
+    <div class="card"><div class="n">"Not measured" ≠ zero</div><div class="v">a missing metric never shows as 0</div><div class="muted" style="font-size:.58em">Unrecorded values render as a dash — never a fake zero.</div></div>
+    <div class="card"><div class="n">Read-only, everywhere</div><div class="v">no file is ever modified</div><div class="muted" style="font-size:.58em">No writes to the corpus, no code execution, no network unless OCR/LLM is explicitly on.</div></div>
+    <div class="card"><div class="n">Archive before destroy</div><div class="v">reset verifies first</div><div class="muted" style="font-size:.58em">Clearing a run archives every job's rows and re-reads them to verify — or it refuses.</div></div>
+  </div>
+  <p class="sub">Tests: <strong>111</strong> on the core library · <strong>46</strong> on the UI · store flows validated end-to-end against a local Azurite stack.</p>
+  <aside class="notes">
+    This is the slide I care most about for a mixed room. Trust isn't a claim here — it's built in. First: the rules-based decision path is fully deterministic. A file that didn't need the model must produce a byte-identical row on every run, and we have a Compare screen that literally diffs two runs to prove no rules-decided row moved. Second: we rigorously distinguish "not measured" from zero — if the pipeline didn't record something, the UI shows a dash, never a misleading zero. Third: the whole thing is read-only — it never touches the corpus and makes no network calls unless you explicitly turn on OCR or the LLM. Fourth: the destructive "reset" operation archives and verifies before it clears anything. Backed by 111 core tests and 46 UI tests, plus end-to-end validation against a local Azure emulator.
+  </aside>
+</section>
+
+<!-- 8 · ACCURACY / SCORING -->
+<section>
+  <span class="kick">Does it actually work?</span>
+  <div class="bar o"></div>
+  <h2>We score every run against human review</h2>
+  <p>The <strong>vs manual review</strong> step compares the pipeline's decisions to a reviewer's entity export and produces a full scorecard.</p>
+  <div class="grid g3" style="margin:.5em 0">
+    <div class="card"><div class="metric crit"><span class="big">↓</span><span>Missed notifications</span></div><div class="muted" style="font-size:.58em">% of <em>cleared</em> files that were actually responsive. The number we drive toward zero. <b>Target &lt; 5%</b>.</div></div>
+    <div class="card"><div class="metric o"><span class="big">↕</span><span>Over-flagged</span></div><div class="muted" style="font-size:.58em">% of <em>flagged</em> files that were actually non-responsive — extra review cost. <b>Target &lt; 50%</b>.</div></div>
+    <div class="card"><div class="metric"><span class="big">✓</span><span>Recall · Precision · F1</span></div><div class="muted" style="font-size:.58em">Plus cost, timing, and per-entity-type breakdowns, all in one workbook.</div></div>
+  </div>
+  <p class="sub">"Read the misses first." The scorecard leads with the responsive files the pipeline cleared — the only error class that can hurt.</p>
+  <aside class="notes">
+    And crucially — does it work? We don't guess. Every run can be scored against a human reviewer's export. The scorecard leads with the number that matters: *missed notifications* — files the pipeline cleared that a human said were responsive. That's the asymmetric risk from slide two, and we drive it toward zero, targeting under 5%. We also track over-flagging, which is just wasted review cost, and the standard recall/precision/F1, cost, and timing. The design philosophy is "read the misses first" — we surface the dangerous errors before anything else.
+  </aside>
+</section>
+
+<!-- 9 · THE UI -->
+<section>
+  <span class="kick">The operator console</span>
+  <div class="bar"></div>
+  <h2>One localhost UI drives the whole scaled run</h2>
+  <div class="grid g4" style="margin-top:.4em; font-size:.92em">
+    <div class="card blue"><div class="v" style="font-size:.8em">Setup</div><div class="muted" style="font-size:.52em">is this machine + store configured?</div></div>
+    <div class="card blue"><div class="v" style="font-size:.8em">New run</div><div class="muted" style="font-size:.52em">validate a corpus → submit</div></div>
+    <div class="card blue"><div class="v" style="font-size:.8em">Runs</div><div class="muted" style="font-size:.52em">history + archive &amp; reset</div></div>
+    <div class="card blue"><div class="v" style="font-size:.8em">Monitor</div><div class="muted" style="font-size:.52em">live progress from the store</div></div>
+    <div class="card orange"><div class="v" style="font-size:.8em">Results</div><div class="muted" style="font-size:.52em">lanes, cost, entity types</div></div>
+    <div class="card orange"><div class="v" style="font-size:.8em">vs manual review</div><div class="muted" style="font-size:.52em">the scorecard</div></div>
+    <div class="card orange"><div class="v" style="font-size:.8em">Compare runs</div><div class="muted" style="font-size:.52em">prove nothing drifted</div></div>
+    <div class="card orange"><div class="v" style="font-size:.8em">Build &amp; deploy</div><div class="muted" style="font-size:.52em">readiness checks</div></div>
+  </div>
+  <div class="guarantee" style="margin-top:.7em; font-size:.82em">
+    Every screen is a <b>view over artefacts the pipeline already writes</b>. The UI builds a command,
+    shows it before it runs, and reads the results back — it never holds authoritative state, and its numbers
+    <b>can't disagree</b> with the CLI. No PII values, ever — only labels and counts.
+  </div>
+  <aside class="notes">
+    Which brings us to the UI I'm about to demo. It's a single localhost console — no install, pure standard library — that drives an entire scaled run through eight screens: set up and validate, submit, monitor live, see results, score against manual review, compare runs, and check build readiness. The design principle carries straight over from the pipeline: every screen is just a *view* over artefacts the pipeline already writes. The UI builds a command, shows it to you before running it, and reads the results back. It never invents a number, so it can never disagree with the CLI — and, same as everywhere, it only ever shows labels and counts, never PII.
+  </aside>
+</section>
+
+<!-- 10 · DEMO HANDOFF -->
+<section data-background-color="#232a31">
+  <div class="center" style="color:#eef2f5">
+    <div class="kick" style="color:#f0a07f">Live demo</div>
+    <h1 style="color:#fff; font-size:2.2em">Let's open the UI</h1>
+    <div style="display:inline-block; text-align:left; margin-top:.6em; color:#c7ced4; font-size:.72em; line-height:1.9">
+      <div>① <b style="color:#fff">Setup</b> — the machine &amp; store are green</div>
+      <div>② <b style="color:#fff">New run</b> — validate a corpus, see the exact command</div>
+      <div>③ <b style="color:#fff">Monitor</b> — watch files complete, live</div>
+      <div>④ <b style="color:#fff">Results</b> — lanes, cost, entity types</div>
+      <div>⑤ <b style="color:#fff">vs manual review</b> — the scorecard</div>
+    </div>
+    <p style="color:#8b95a0; font-size:.6em; margin-top:1.4em"><code style="background:#2f3944; color:#cfe0f2">./HWE_Scaled.sh</code> &nbsp;→&nbsp; http://127.0.0.1:&lt;port&gt;/</p>
+  </div>
+  <aside class="notes">
+    That's the context — now the real thing. I'll launch the console and walk the path an operator actually takes: Setup to confirm everything's green, New run to validate a corpus and show you the command it'll run, Monitor to watch it live, Results to see where files landed and what it cost, and finally the scorecard against manual review. [Switch to the UI now.]
+  </aside>
+</section>
+
+<!-- 11 · RECAP -->
+<section>
+  <span class="kick">Recap</span>
+  <div class="bar"></div>
+  <h2>What pii_triage gives you</h2>
+  <ul style="font-size:.92em">
+    <li><strong>An automatic first pass</strong> over a whole corpus — humans review only the ambiguous middle.</li>
+    <li><strong>A hard privacy guarantee</strong> — counts and labels leave the system; PII values never do.</li>
+    <li><strong>Scales from a laptop to a 21-worker Azure fleet</strong> — same engine, crash-safe, autoscaling.</li>
+    <li><strong>Provable accuracy</strong> — scored against human review, misses surfaced first, runs compared for drift.</li>
+    <li><strong>One console</strong> to run, watch, score, and compare — a view over what the pipeline already writes.</li>
+  </ul>
+  <p class="sub" style="margin-top:1em">Docs in the repo: <code>PROJECT_OVERVIEW.md</code> · <code>UI_OVERVIEW.md</code> · <code>RUNBOOK.md</code> · <code>CLI_ONLY.md</code></p>
+  <div class="center" style="margin-top:1em"><span class="pill b">Questions?</span></div>
+  <aside class="notes">
+    To bring it home — five things. It's an automatic first pass so humans only touch the hard cases. It has a hard privacy guarantee: values never leave. It scales from a laptop to a full Azure fleet on the same code. Its accuracy is provable, not asserted — scored against human review with the dangerous misses surfaced first. And it's all driven from one honest console. Everything's documented in the repo. Happy to take questions — and thanks.
+  </aside>
+</section>
+
+</div></div>
+
+<script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/plugin/notes/notes.js"></script>
+<script>
+  Reveal.initialize({
+    hash:true, slideNumber:'c/t', transition:'slide', width:1180, height:720,
+    margin:0.06, controls:true, progress:true,
+    plugins:[ RevealNotes ]
+  });
+</script>
+</body>
+</html>
