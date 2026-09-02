@@ -13,6 +13,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "pii_triage_merged"))
 
 import argparse
+import csv
 
 from dotenv import load_dotenv
 from scaling_lib.worker import Worker
@@ -84,7 +85,8 @@ def _build_config(ocr: bool = False, llm: bool = False, ner: bool = False) -> Co
         use_llm=_flag("USE_LLM", llm),
         llm_deployment=os.environ.get("AZURE_OPENAI_DEPLOYMENT")
                       or os.environ.get("AZURE_OPENAI_DEPLOYMENT_GPT_5_4_NANO", ""),
-        timeout_s=int(os.environ.get("FILE_TIMEOUT_S", 60)),
+        # Per-file timeout in seconds (extraction / processing helper limits).
+        timeout_s=int(os.environ.get("FILE_TIMEOUT_S", 150)),
         max_bytes=int(os.environ.get("MAX_BYTES", 1 << 30)),
         max_scan_chars=int(os.environ.get("MAX_SCAN_CHARS", 5_000_000)),
         max_scan_rows=int(os.environ.get("MAX_SCAN_ROWS", 200_000)),
@@ -304,6 +306,19 @@ def process(file_path: str, output_dir: Path) -> None:
         elif status in _WARN_STATUSES:
             logging.warning("%-12s %s  (%s)", status, file_path, detail)
         (output_dir / "result.json").write_text(json.dumps(rec))
+        # Also append this result to a per-job inventory CSV so the job has
+        # a continuously-updating inventory as workers finish files.
+        try:
+            from pii_triage.routing import FIELDNAMES
+            inventory_csv = output_dir.parent / "inventory.csv"
+            write_header = (not inventory_csv.exists()) or (inventory_csv.stat().st_size == 0)
+            with open(inventory_csv, "a", encoding="utf-8", newline="") as fh:
+                writer = csv.DictWriter(fh, fieldnames=FIELDNAMES, extrasaction="ignore", restval="")
+                if write_header:
+                    writer.writeheader()
+                writer.writerow(rec)
+        except Exception:
+            logging.debug("could not append per-job inventory.csv", exc_info=True)
     finally:
         with _worker_completions_lock:
             _worker_completions += 1

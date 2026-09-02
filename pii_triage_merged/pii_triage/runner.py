@@ -36,7 +36,8 @@ logger = logging.getLogger(__name__)
 
 # Default per-file hard-timeout for the watchdog, in seconds. On by default (see run());
 # override per-run with env PII_WATCHDOG_S ("0" disables) or cfg.hard_timeout_s.
-DEFAULT_WATCHDOG_S = 120.0
+# Set to 150s (2.5 minutes) so no file can consume more than 2.5 minutes.
+DEFAULT_WATCHDOG_S = 150.0
 _FAILURE_STATUSES = frozenset({"error", "timeout"})
 
 # Worker globals (set once per worker; avoids pickling compiled regex per task).

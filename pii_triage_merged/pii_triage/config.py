@@ -264,7 +264,8 @@ class Config:
     llm_deployment: str = ""            # Azure OpenAI deployment name (e.g. gpt-4.5-nano)
     doc_intel_model: str = "prebuilt-layout"
     protocol_text: str = ""             # matter protocol injected into LLM judgment
-    timeout_s: int = 60
+    # Per-file extraction/operation timeout (seconds). Default 150s (2.5 minutes).
+    timeout_s: int = 150
     max_bytes: int = 1 << 30
     max_scan_chars: int = 5_000_000
     llm_input_chars: int = 24_000       # chars sampled from a file for the LLM prompt
