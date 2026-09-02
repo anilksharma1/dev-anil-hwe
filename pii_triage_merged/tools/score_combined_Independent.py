@@ -433,29 +433,6 @@ def _read_manifest_root(inventory_path: str) -> str:
         return ""
 
 
-def _try_run_metrics():
-    """Return scaling data dict, or None if unavailable."""
-    try:
-        from scaling_lib.metrics import run_metrics
-        m = run_metrics()
-    except ImportError:
-        return None
-    except Exception as exc:
-        print(f"\n  (scaling-lib run_metrics() unavailable: {type(exc).__name__}: {exc})")
-        return None
-    completed = [t for t in m.tasks if t.status == "completed"]
-    win_instances = {
-        t.worker_instance for t in completed
-        if t.worker_instance and
-        any(t.file_name.lower().endswith(e) for e in _LEGACY_EXTS)
-    }
-    win_tasks = [t for t in completed if t.worker_instance in win_instances]
-    lin_tasks = [t for t in completed if t.worker_instance not in win_instances]
-    return {"m": m, "completed": completed,
-            "win_instances": win_instances,
-            "win_tasks": win_tasks, "lin_tasks": lin_tasks}
-
-
 def _load_timing_snapshot(path: str):
     """Load a _timing.json written by collect_outputs.dump_timing.
 
@@ -2403,7 +2380,9 @@ def main():
                 "di":        rec["di"], "detail":     rec["detail"],
             })
 
-    # ==================== try scaling data ==================================
+    # ==================== try scaling data (local snapshot only) ============
+    # Independent script: never calls out to scaling-lib/Azure. Timing data
+    # is used only if a local _timing.json snapshot is found or given.
     _auto_timing = os.path.splitext(a.inventory)[0] + "_timing.json"
     timing_path = a.timing or (_auto_timing if os.path.exists(_auto_timing) else None)
     if timing_path:
@@ -2412,13 +2391,11 @@ def main():
             scaling = _load_timing_snapshot(timing_path)
             print("ok")
         except Exception as _exc:
-            print(f"failed ({_exc}), falling back to live run_metrics()...")
-            scaling = _try_run_metrics()
-            print("ok" if scaling else "not available")
+            print(f"failed ({_exc}); skipping Timing sheet.")
+            scaling = None
     else:
-        print("\nFetching scaling-lib run metrics...", end=" ", flush=True)
-        scaling = _try_run_metrics()
-        print("ok" if scaling else "not available")
+        print("\nNo timing snapshot found (pass --timing <file>_timing.json); skipping Timing sheet.")
+        scaling = None
 
     # ==================== write Excel =======================================
     today = datetime.date.today().strftime("%Y%m%d")
