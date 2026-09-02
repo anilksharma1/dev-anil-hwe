@@ -208,7 +208,8 @@ S.monitor = () => {
 
   <div class="card">
     <div class="hero">${pct.toFixed(1)}<span style="font-size:26px">%</span></div>
-    <div class="hero-lab">${fmt(done)} of ${fmt(total)} files complete — from the status table (authoritative)</div>
+    <div class="hero-lab">${fmt(done)} of ${fmt(total)} files complete — from the status table (authoritative);
+      counted per real input file, not per attempt or per Windows-leg conversion hop</div>
     <div class="meter" style="margin-top:14px"><i style="width:${pct}%"></i></div>
   </div>
   <div class="row" style="margin-top:14px">
@@ -250,6 +251,15 @@ S.monitor = () => {
     Claimed but not completed for longer than the ${fmt(m.visibility_timeout_s)}s visibility timeout — a
     crashed worker's claim that must expire, or those documents are lost silently.
     <div class="detail" style="font-family:var(--mono);font-size:11.5px;margin-top:6px;color:var(--ink-3)">${m.stuck.slice(0,8).map(s=>esc(s.file_name)+' · '+fmt(s.age_s)+'s · '+esc(s.worker_instance)).join('<br>')}</div></div>`:''}
+
+  ${(m.processing_tasks||[]).length?`<h2>In progress right now (${fmt(m.processing_tasks.length)})</h2>
+    <div class="card"><div class="tblwrap"><table><thead><tr><th>File</th><th>Worker</th>
+    <th class="n">Attempt</th><th class="n">Elapsed</th></tr></thead><tbody>
+    ${m.processing_tasks.slice(0,50).map(p=>`<tr><td class="k" style="font-family:var(--mono);font-size:11.5px">${esc(p.file_name)}</td>
+      <td style="font-family:var(--mono);font-size:11.5px">${esc(p.worker_instance)||'—'}</td>
+      <td class="n">${fmt(p.attempt_count)}</td>
+      <td class="n">${p.elapsed_s==null?'—':fmt(p.elapsed_s)+'s'}</td></tr>`).join('')}
+    </tbody></table></div></div>`:''}
 
   ${(m.failures||[]).length?`<h2>Failures (file id + error class only — no document text, no PII)</h2>
     <div class="card"><div class="tblwrap"><table><thead><tr><th>File</th><th>Status</th><th class="n">Tries</th><th>Error</th></tr></thead><tbody>

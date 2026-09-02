@@ -15,6 +15,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 
 import hwe_scaled_ui as ui
 import hwe_scaled_store as store
@@ -272,6 +273,115 @@ class ConcurrencySweep(unittest.TestCase):
 
     def test_zero_length_intervals_contribute_nothing(self):
         self.assertEqual(store.concurrency_series([(5, 5), (5, 5)]), [])
+
+
+class LegacyPairCollapse(unittest.TestCase):
+    """A Windows-leg .doc/.xls/.ppt file produces TWO Table rows (findings §6); the KPI fix is
+    that per-state counts must reflect real input files, not raw rows."""
+
+    def test_completed_pair_collapses_to_one(self):
+        ents = [{"file_name": "report.doc", "status": "completed"},
+                {"file_name": "report.docx", "status": "processing"}]
+        out = store._collapse_legacy_pairs(ents)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["file_name"], "report.docx")
+
+    def test_unconverted_legacy_row_is_kept(self):
+        # conversion hasn't forwarded yet -- no counterpart exists, so this row IS the file's state
+        ents = [{"file_name": "report.doc", "status": "pending"}]
+        out = store._collapse_legacy_pairs(ents)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["file_name"], "report.doc")
+
+    def test_non_legacy_files_untouched(self):
+        ents = [{"file_name": "memo.pdf", "status": "completed"},
+                {"file_name": "notes.txt", "status": "pending"}]
+        self.assertEqual(store._collapse_legacy_pairs(ents), ents)
+
+    def test_mixed_corpus_total_matches_real_file_count(self):
+        # 1 legacy file (2 rows) + 2 ordinary files (1 row each) = 3 real files
+        ents = [
+            {"file_name": "a.xls", "status": "completed"},
+            {"file_name": "a.xlsx", "status": "completed"},
+            {"file_name": "b.pdf", "status": "completed"},
+            {"file_name": "c.pptx", "status": "pending"},
+        ]
+        self.assertEqual(len(store._collapse_legacy_pairs(ents)), 3)
+
+
+class LiveProcessing(unittest.TestCase):
+    """The 'worker 1 processing file 1, retry 3, 40s' panel."""
+
+    def test_only_processing_rows_included(self):
+        now = datetime.now(timezone.utc)
+        ents = [
+            {"file_name": "a.pdf", "status": "processing", "worker_instance": "w1",
+             "attempt_count": 3, "started_at": now - timedelta(seconds=40)},
+            {"file_name": "b.pdf", "status": "completed", "worker_instance": "w1",
+             "attempt_count": 1, "started_at": now},
+        ]
+        out = store._live_processing(ents)
+        self.assertEqual(len(out), 1)
+        row = out[0]
+        self.assertEqual(row["file_name"], "a.pdf")
+        self.assertEqual(row["worker_instance"], "w1")
+        self.assertEqual(row["attempt_count"], 3)
+        self.assertGreaterEqual(row["elapsed_s"], 39)
+
+    def test_sorted_longest_running_first(self):
+        now = datetime.now(timezone.utc)
+        ents = [
+            {"file_name": "short.pdf", "status": "processing", "started_at": now - timedelta(seconds=5)},
+            {"file_name": "long.pdf", "status": "processing", "started_at": now - timedelta(seconds=500)},
+        ]
+        out = store._live_processing(ents)
+        self.assertEqual([r["file_name"] for r in out], ["long.pdf", "short.pdf"])
+
+
+class JobMetricsCollapsesLegacyPairs(unittest.TestCase):
+    """End-to-end through job_metrics() with a monkeypatched _entities_for -- no Azure needed
+    (same monkeypatch style as ArchiveGuardsReset). Proves the KPI fix and the new live-processing
+    panel both reach the Monitor payload."""
+
+    def setUp(self):
+        self._orig = store._entities_for
+
+    def tearDown(self):
+        store._entities_for = self._orig
+
+    def test_total_and_completed_match_real_file_count(self):
+        now = datetime.now(timezone.utc)
+        ents = [
+            {"PartitionKey": "J", "RowKey": "r1", "file_name": "report.doc", "status": "completed",
+             "attempt_count": 1, "started_at": now, "completed_at": now, "enqueued_at": now},
+            {"PartitionKey": "J", "RowKey": "r2", "file_name": "report.docx", "status": "completed",
+             "attempt_count": 1, "started_at": now, "completed_at": now, "enqueued_at": now},
+            {"PartitionKey": "J", "RowKey": "r3", "file_name": "a.pdf", "status": "completed",
+             "attempt_count": 1, "started_at": now, "completed_at": now, "enqueued_at": now},
+            {"PartitionKey": "J", "RowKey": "r4", "file_name": "b.pdf", "status": "pending",
+             "attempt_count": 1, "started_at": now, "enqueued_at": now},
+        ]
+        store._entities_for = lambda job_id: ents
+        m = store.job_metrics("J")
+        self.assertEqual(m["total"], 3)          # not 4 -- the legacy pair collapses to 1 real file
+        self.assertEqual(m["files_completed"], 2)
+        self.assertEqual(m["files_pending"], 1)
+
+    def test_processing_tasks_surface_worker_attempt_elapsed(self):
+        now = datetime.now(timezone.utc)
+        ents = [
+            {"PartitionKey": "J", "RowKey": "r1", "file_name": "a.pdf", "status": "processing",
+             "worker_instance": "worker-1", "attempt_count": 3,
+             "started_at": now - timedelta(seconds=40), "enqueued_at": now},
+        ]
+        store._entities_for = lambda job_id: ents
+        m = store.job_metrics("J")
+        self.assertEqual(len(m["processing_tasks"]), 1)
+        row = m["processing_tasks"][0]
+        self.assertEqual(row["file_name"], "a.pdf")
+        self.assertEqual(row["worker_instance"], "worker-1")
+        self.assertEqual(row["attempt_count"], 3)
+        self.assertGreaterEqual(row["elapsed_s"], 39)
 
 
 class EnvReport(unittest.TestCase):

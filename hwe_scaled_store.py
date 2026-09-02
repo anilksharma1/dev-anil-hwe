@@ -225,6 +225,66 @@ def _epoch(dt) -> float | None:
         return None
 
 
+# A legacy Windows-leg file (worker.py's _convert_and_forward) produces TWO Table rows
+# under the same job_id: the pre-conversion row (file_name="report.doc") and, once COM
+# conversion succeeds, a second post-conversion row forwarded to the Linux queue
+# (file_name="report.docx") that carries the real processing outcome/tokens/timing.
+# Counting both inflates "total files" / "completed" by one extra row per legacy file.
+_LEGACY_EXT_MAP = {".doc": ".docx", ".xls": ".xlsx", ".ppt": ".pptx"}
+
+
+def _collapse_legacy_pairs(ents: list) -> list:
+    """Collapse a Windows-leg pre-conversion row into its post-conversion counterpart so
+    per-state counts reflect actual input files, not Table rows (findings §6: "a Windows
+    .doc/.xls/.ppt produces two Table rows"). Table-only (no filesystem read, so this stays
+    cheap on every ~3s Monitor poll): the converted file_name is deterministic (stem +
+    docx/xlsx/pptx, matching conversion.py's _EXT_MAP), so a pair is recognised purely from
+    file_name -- if a legacy row's converted-name counterpart is ALSO present in this job,
+    the legacy row is dropped (the converted row is that file's true current state: still
+    pending/processing on the Linux leg, or completed/failed). A legacy row with NO
+    converted counterpart yet (conversion hasn't forwarded, or never will) is kept as-is --
+    it IS the file's current state.
+
+    Heuristic, like the "approximate" queue counts elsewhere in this module: a corpus that
+    happens to contain BOTH "x.doc" and an unrelated, genuinely distinct "x.docx" as separate
+    original files would see the ".doc" row collapsed away too. This trades a rare
+    false-collapse for a cheap, no-I/O check on every live poll; collect_outputs.py's
+    inventory (the deliverable) reconciles this authoritatively via the on-disk
+    forwarded.json/.orig.json sidecars instead.
+    """
+    file_names = {e.get("file_name", "") for e in ents}
+    out = []
+    for e in ents:
+        name = e.get("file_name", "")
+        stem, ext = os.path.splitext(name)
+        converted_ext = _LEGACY_EXT_MAP.get(ext.lower())
+        if converted_ext and (stem + converted_ext) in file_names:
+            continue  # this file's true state is the converted row, counted separately
+        out.append(e)
+    return out
+
+
+def _live_processing(ents: list) -> list:
+    """Every task currently claimed by a worker (status == 'processing'), with which
+    worker, which attempt, and how long it's been running -- e.g. "worker-abc123 ·
+    report.pdf · attempt 3 · 40s". Complements stuck_from_entities (which only surfaces
+    tasks OVER the visibility timeout) with the full live picture; longest-running first."""
+    now = datetime.now(timezone.utc).timestamp()
+    out = []
+    for e in ents:
+        if e.get("status") != "processing":
+            continue
+        started = _epoch(e.get("started_at"))
+        out.append({
+            "file_name": e.get("file_name", ""),
+            "worker_instance": e.get("worker_instance", ""),
+            "attempt_count": int(e.get("attempt_count") or 1),
+            "elapsed_s": int(now - started) if started is not None else None,
+        })
+    out.sort(key=lambda r: (r["elapsed_s"] is None, -(r["elapsed_s"] or 0)))
+    return out
+
+
 def job_metrics(job_id: str, visibility_timeout: int | None = None) -> dict:
     """Aggregate one job by querying its partition and reusing scaling_lib's RunMetrics dataclass —
     the same aggregation `scaling-lib status` uses, but scoped to a chosen job_id instead of only
@@ -233,7 +293,7 @@ def job_metrics(job_id: str, visibility_timeout: int | None = None) -> dict:
     import json as _json
     from scaling_lib.metrics import RunMetrics, TaskRecord, CheckpointRecord
 
-    ents = _entities_for(job_id)
+    ents = _collapse_legacy_pairs(_entities_for(job_id))
     tasks = []
     for e in ents:
         cps = []
@@ -295,11 +355,13 @@ def job_metrics(job_id: str, visibility_timeout: int | None = None) -> dict:
                 eta_range_min = [round(eta * 0.7), round(eta * 1.4)]   # a range, not a point
 
     stuck = stuck_from_entities(ents, visibility_timeout) if visibility_timeout else []
+    processing = _live_processing(ents)
 
     return {
         "job_id": job_id,
         "total": len(ents),
         "status_counts": dict(status_counts),
+        "processing_tasks": processing,
         "files_completed": m.files_completed, "files_processing": m.files_processing,
         "files_pending": m.files_pending, "files_failed": m.files_failed,
         "files_retried": m.files_retried, "total_extra_attempts": m.total_extra_attempts,
