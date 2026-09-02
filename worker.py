@@ -229,6 +229,30 @@ def _forward_to_linux_queue(job_id: str, converted_path: Path) -> None:
     client.send_message(_build_message(stored_path, job_id, job_type, posix=True))
 
 
+def _conversion_lost_record(file_path: str, detail: str) -> dict:
+    """A normal, bounded FileRecord for a legacy conversion that hung and had to be
+    force-killed -- written in place of raising, so the task completes ONCE instead
+    of being retried by scaling-lib. A genuine hang (a corrupt file, a blocking modal
+    with no one to click it) will hang again for the same CONVERT_TIMEOUT_S on a
+    retry, so retrying it only doubles the time lost for a result already known.
+    Ordinary (non-timeout) conversion failures still raise below and keep the normal
+    WORKER_MAX_ATTEMPTS retry behavior -- only a confirmed lost cause skips retries.
+    """
+    from pii_triage.routing import FileRecord
+    orig = Path(file_path)
+    try:
+        rel = os.path.relpath(file_path, _cfg.root)
+    except Exception:
+        rel = file_path
+    try:
+        size = os.path.getsize(file_path)
+    except OSError:
+        size = 0
+    rec = FileRecord(rel_path=rel, file_name=orig.name, ext=orig.suffix.lower(), size_bytes=size)
+    rec.status, rec.detail = "timeout", detail
+    return _runner._finalize_early(rec, "timeout")
+
+
 def _convert_and_forward(file_path: str, output_dir: Path, task) -> None:
     """Windows-only: convert a legacy Office file, then hand detection off to a Linux worker.
 
@@ -236,7 +260,7 @@ def _convert_and_forward(file_path: str, output_dir: Path, task) -> None:
     the actual detection/OCR/LLM pipeline runs on the horizontally-scalable Linux
     fleet instead of serialized behind one COM instance.
     """
-    from pii_triage.conversion import convert_legacy_office
+    from pii_triage.conversion import convert_legacy_office, ConversionTimeout
 
     orig = Path(file_path)
     if task is None:
@@ -247,8 +271,20 @@ def _convert_and_forward(file_path: str, output_dir: Path, task) -> None:
     dest_dir = Path(_cfg.root) / "_converted" / task.job_id
     dest_dir.mkdir(parents=True, exist_ok=True)
 
-    with task.checkpoint("convert"):
-        converted = convert_legacy_office(file_path, dest_dir, _cfg.timeout_s)
+    # A separate, independently-tunable timeout for just the COM hop (falls back to
+    # the general per-file timeout) -- lets a slow-but-legitimate extract/OCR/LLM
+    # budget stay generous while conversion itself fails fast on a "lost" file.
+    convert_timeout_s = int(os.environ.get("CONVERT_TIMEOUT_S") or _cfg.timeout_s)
+
+    try:
+        with task.checkpoint("convert"):
+            converted = convert_legacy_office(file_path, dest_dir, convert_timeout_s)
+    except ConversionTimeout as exc:
+        rec = _conversion_lost_record(file_path, f"legacy_conversion_timeout: {exc}")
+        (output_dir / "result.json").write_text(json.dumps(rec))
+        logging.error("conversion_lost  %s  (gave up after %ss, no retry: %s)",
+                      orig.name, convert_timeout_s, exc)
+        return
     if not converted:
         raise RuntimeError(f"conversion failed for {file_path}")
 
@@ -365,7 +401,16 @@ def main() -> None:
             baseline_dlq, 100.0 * _DLQ_FAILURE_RATE, _DLQ_CHECK_INTERVAL_S, _DLQ_WORKER_COUNT,
         )
 
-    Worker().run(process)
+    # concurrency = files processed simultaneously (threads) within this one container --
+    # I/O-bound work (network reads on OUTPUT_MOUNT/INPUT_MOUNT, OCR/LLM calls) releases the
+    # GIL and genuinely overlaps across threads, so this is a real speed lever, not a no-op.
+    # scaling-lib's own built-in default is 1 (effectively serial per container) unless
+    # WORKER_CONCURRENCY is set; ship a higher default here so a fresh deployment isn't
+    # accidentally single-threaded. Still fully overridable via WORKER_CONCURRENCY. Size it
+    # against your Azure OpenAI / Document Intelligence deployment's RPM -- concurrency times
+    # replica count is what actually hits those rate limits.
+    concurrency = int(os.environ.get("WORKER_CONCURRENCY") or 4)
+    Worker(concurrency=concurrency).run(process)
 
 
 if __name__ == "__main__":

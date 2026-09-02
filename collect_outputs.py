@@ -328,6 +328,158 @@ def collect(out_path: str = "inventory.csv", concurrency: int = 32) -> int:
     return len(rows)
 
 
+# --------------------------------------------------------------------------------- #
+# --watch: append newly-completed results as they land, instead of waiting for the
+# whole queue to drain. A file is available the moment its worker writes result.json
+# to OUTPUT_MOUNT (already a shared Azure File Share -- no separate transfer needed);
+# this just polls the status table on an interval and appends what's new.
+# --------------------------------------------------------------------------------- #
+
+def _row_key(entity: dict) -> str:
+    return f"{entity['PartitionKey']}/{entity['RowKey']}"
+
+
+def _watch_state_path(out_path: str) -> str:
+    return out_path + ".watch_state.json"
+
+
+def _load_watch_state(state_path: str) -> set:
+    if not os.path.exists(state_path):
+        return set()
+    try:
+        with open(state_path, "r", encoding="utf-8") as fh:
+            return set(json.load(fh).get("seen_row_keys", []))
+    except (OSError, json.JSONDecodeError):
+        return set()
+
+
+def _save_watch_state(state_path: str, seen: set) -> None:
+    tmp = state_path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump({"seen_row_keys": sorted(seen)}, fh)
+    os.replace(tmp, state_path)
+
+
+def _is_drained() -> bool:
+    """True once no row anywhere in the table is pending/processing. Table-wide, matching
+    collect()'s own table-wide scope (there is no --job-id on collect)."""
+    from scaling_lib.status import _fetch_entities
+    for e in _fetch_entities():
+        if e.get("status") in ("pending", "processing"):
+            return False
+    return True
+
+
+def collect_incremental(out_path: str, seen: set, concurrency: int = 32) -> tuple:
+    """One incremental pass: append any newly-completed rows not already in `seen`,
+    flushed to disk immediately. Returns (new_row_count, updated seen set).
+
+    A row is added to `seen` once its outcome is known either way: a real result.json
+    (written to out_path) or a confirmed Windows-leg conversion stub (forwarded.json --
+    never produces its own result.json, so there is nothing further to wait for). A
+    genuinely missing/unparseable output is left OUT of `seen` so it's retried next
+    pass -- result.json may simply still be mid-write on a slow network share.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    from scaling_lib.status import _fetch_entities
+    from pii_triage.routing import FIELDNAMES
+
+    entities = [e for e in _fetch_entities(status_filter="completed") if _row_key(e) not in seen]
+    if not entities:
+        return 0, seen
+
+    rows = []
+    missing = []
+    with ThreadPoolExecutor(max_workers=concurrency) as pool:
+        for entity, (data, reason) in zip(entities, pool.map(_read_completed_entity, entities)):
+            if data is not None:
+                rows.append(data)
+                seen.add(_row_key(entity))
+            elif reason is None:
+                seen.add(_row_key(entity))   # windows-leg stub -- nothing more will ever land here
+            else:
+                missing.append(reason)
+
+    if rows:
+        file_exists = os.path.exists(out_path) and os.path.getsize(out_path) > 0
+        with open(out_path, "a", encoding="utf-8", newline="") as fh:
+            writer = csv.DictWriter(fh, fieldnames=FIELDNAMES, extrasaction="ignore", restval="")
+            if not file_exists:
+                writer.writeheader()
+            writer.writerows(rows)
+            fh.flush()
+            os.fsync(fh.fileno())
+
+    if missing:
+        sys.stderr.write(f"  ({len(missing)} output(s) not yet readable, will retry next pass"
+                         + (f": {missing[0]}" if len(missing) == 1 else "") + ")\n")
+
+    return len(rows), seen
+
+
+def watch(out_path: str = "inventory.csv", interval: float = 15.0, concurrency: int = 32,
+          restart: bool = False, max_iterations: int | None = None) -> int:
+    """Continuously append newly-completed files into out_path as they finish, instead of
+    only collecting once the whole queue has drained. Crash-safe and restartable: a
+    sidecar <out_path>.watch_state.json tracks which Table rows are already written, the
+    same "durable progress record" discipline runner.py's CSV resume already uses.
+
+    Stops automatically once the table fully drains (a doc that finishes between the
+    drained check and the final pass is still caught by that last pass), or on Ctrl+C --
+    either way, already-written rows and the resume state are safe on disk.
+    `max_iterations` is a test hook; leave it None to run until drained/interrupted.
+    """
+    state_path = _watch_state_path(out_path)
+
+    if restart:
+        for p in (out_path, state_path):
+            if os.path.exists(p):
+                os.remove(p)
+
+    if os.path.exists(out_path) and not os.path.exists(state_path):
+        sys.stderr.write(
+            f"ERROR: '{out_path}' already exists but has no watch-state sidecar ({state_path}).\n"
+            f"       It looks like it was written by a one-shot collect() run (or a previous "
+            f"--watch run's\n       state file was deleted). Appending here could duplicate rows.\n"
+            f"       Pass --restart to start fresh, or point --out at a new file.\n")
+        raise SystemExit(2)
+
+    seen = _load_watch_state(state_path)
+    total_written = 0
+    if os.path.exists(out_path):
+        with open(out_path, "r", encoding="utf-8", newline="") as fh:
+            total_written = max(sum(1 for _ in fh) - 1, 0)   # rows minus header
+
+    sys.stderr.write(f"watching for newly-completed files -> {out_path} "
+                     f"(every {interval:.0f}s; resumed {len(seen)} already-seen row(s), "
+                     f"{total_written} already-written record(s))\n")
+
+    iterations = 0
+    try:
+        while True:
+            n, seen = collect_incremental(out_path, seen, concurrency)
+            if n:
+                total_written += n
+                _save_watch_state(state_path, seen)
+                sys.stderr.write(f"  +{n} (total {total_written})\n")
+            iterations += 1
+            if max_iterations is not None and iterations >= max_iterations:
+                break
+            if _is_drained():
+                n, seen = collect_incremental(out_path, seen, concurrency)   # catch any stragglers
+                if n:
+                    total_written += n
+                    _save_watch_state(state_path, seen)
+                    sys.stderr.write(f"  +{n} (total {total_written})\n")
+                sys.stderr.write(f"queue drained -- stopping. {total_written} record(s) in {out_path}\n")
+                break
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        sys.stderr.write(f"\ninterrupted -- {total_written} record(s) in {out_path} so far "
+                         f"(state saved; rerun --watch to resume)\n")
+    return total_written
+
+
 if __name__ == "__main__":
     p = argparse.ArgumentParser(
         description="Collect scaling-lib worker outputs into inventory.csv.")
@@ -337,11 +489,23 @@ if __name__ == "__main__":
                    help="Parallel result.json reads (default: 32) -- raise this on a large corpus")
     p.add_argument("--no-timing", action="store_true",
                    help="Skip writing the timing snapshot JSON alongside inventory.csv")
+    p.add_argument("--watch", action="store_true",
+                   help="Keep running, appending newly-completed files to --out as they land, "
+                        "instead of waiting for the whole queue to drain. Stops automatically once "
+                        "drained, or on Ctrl+C (resumable via a <out>.watch_state.json sidecar).")
+    p.add_argument("--interval", type=float, default=15.0,
+                   help="--watch only: seconds between polls (default: 15)")
+    p.add_argument("--restart", action="store_true",
+                   help="--watch only: discard an existing --out and its watch-state sidecar, "
+                        "and start fresh")
     a = p.parse_args()
 
     from dotenv import load_dotenv
     load_dotenv(a.env_file)
 
-    collect(a.out, a.concurrency)
+    if a.watch:
+        watch(a.out, a.interval, a.concurrency, a.restart)
+    else:
+        collect(a.out, a.concurrency)
     if not a.no_timing:
         dump_timing(a.out)
