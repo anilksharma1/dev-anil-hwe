@@ -1,13 +1,14 @@
 ARG JOB_TYPE
 
 FROM python:3.12-slim AS builder
-ARG GITHUB_TOKEN
-RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && rm -rf /var/lib/apt/lists/*
 COPY pii_triage_merged/requirements.txt .
-RUN python -m venv /venv && \
-    /venv/bin/pip install \
-    -r requirements.txt \
-    git+https://${GITHUB_TOKEN}@github.com/ldmglobal-com/scaling-lib.git@dev
+# If a local `scaling_lib/` checkout is present in the build context, copy it and install
+COPY scaling_lib/ /scaling_lib/
+RUN set -eux; \
+    python -m venv /venv; \
+    # prefer installing the vendored scaling_lib when present; pip will ignore missing extras
+    /venv/bin/pip install -r requirements.txt /scaling_lib[dev]
 
 FROM python:3.12-slim
 WORKDIR /app
