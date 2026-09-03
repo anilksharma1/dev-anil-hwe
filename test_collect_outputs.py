@@ -8,12 +8,14 @@ scaling-lib isn't pip-installed (mirrors hwe_scaled_store.py's own dev-mode path
 Run:  python -m unittest test_collect_outputs -v
 """
 import csv
+import json
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timezone
 
 _SL_SRC = os.environ.get("SCALING_LIB_SRC")
 if _SL_SRC and os.path.isdir(_SL_SRC) and _SL_SRC not in sys.path:
@@ -235,6 +237,47 @@ class WatchLoop(unittest.TestCase):
 
         total = co.watch(self.out, interval=0.01)
         self.assertEqual(total, 1)   # the pre-existing row, correctly counted, never re-read
+
+
+class DumpTimingCollapsesLegacyPairs(unittest.TestCase):
+    """Gap 6: _timing.json's files_completed/tasks must not double-count a Windows-leg
+    pre-conversion + post-conversion row pair (collect()'s own inventory.csv never had this
+    bug -- this is the OTHER place the same raw-row count was leaking)."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.out = os.path.join(self.d, "inventory.csv")
+        import scaling_lib.metrics as sl_metrics
+        self.sl_metrics = sl_metrics
+        self._orig_run_metrics = sl_metrics.run_metrics
+        self._orig_worker_config = co._fetch_worker_config
+        co._fetch_worker_config = lambda: None   # skip the ARM/pricing network calls
+
+    def tearDown(self):
+        self.sl_metrics.run_metrics = self._orig_run_metrics
+        co._fetch_worker_config = self._orig_worker_config
+        shutil.rmtree(self.d, ignore_errors=True)
+
+    def test_files_completed_and_tasks_collapse_the_legacy_pair(self):
+        sl_metrics = self.sl_metrics
+        now = datetime.now(timezone.utc)
+        tasks = [
+            sl_metrics.TaskRecord(file_name="report.doc", job_id="J", file_size_bytes=10,
+                                  started_at=now, status="completed", completed_at=now),
+            sl_metrics.TaskRecord(file_name="report.docx", job_id="J", file_size_bytes=20,
+                                  started_at=now, status="completed", completed_at=now),
+            sl_metrics.TaskRecord(file_name="memo.pdf", job_id="J", file_size_bytes=30,
+                                  started_at=now, status="completed", completed_at=now),
+        ]
+        sl_metrics.run_metrics = lambda: sl_metrics.RunMetrics(tasks=tasks)
+
+        self.assertTrue(co.dump_timing(self.out))
+        snap_path = self.out[:-len(".csv")] + "_timing.json"
+        with open(snap_path, encoding="utf-8") as fh:
+            snap = json.load(fh)
+        self.assertEqual(snap["files_completed"], 2)   # not 3 -- the legacy pair collapses to 1
+        self.assertEqual(len(snap["tasks"]), 2)
+        self.assertEqual({t["file_name"] for t in snap["tasks"]}, {"report.docx", "memo.pdf"})
 
 
 if __name__ == "__main__":

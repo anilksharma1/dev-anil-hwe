@@ -232,11 +232,20 @@ def dump_timing(out_path: str) -> bool:
     import pathlib
 
     try:
-        from scaling_lib.metrics import run_metrics
+        from scaling_lib.metrics import run_metrics, RunMetrics
         m = run_metrics()
     except Exception as exc:
         sys.stderr.write(f"timing dump skipped: {type(exc).__name__}: {exc}\n")
         return False
+
+    # A Windows-leg .doc/.xls/.ppt file produces TWO Table rows (the pre-conversion stub and
+    # the post-conversion row that actually ran); run_metrics() counts raw rows, so without
+    # this, files_completed/files_failed/etc. here would over-count by one row per legacy file
+    # (collect()'s own inventory.csv never had this bug -- it already skips the stub via its
+    # forwarded.json check; this snapshot is the other place the same raw-row count leaked).
+    # Rebuilding a fresh RunMetrics over the filtered list recomputes every cached aggregate.
+    from pii_triage.legacy_pairs import collapse_legacy_pairs
+    m = RunMetrics(tasks=collapse_legacy_pairs(m.tasks, name_of=lambda t: t.file_name))
 
     def _dt(v):
         return v.isoformat() if v is not None else None

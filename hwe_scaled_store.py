@@ -25,6 +25,14 @@ _SL_SRC = os.environ.get("SCALING_LIB_SRC")
 if _SL_SRC and os.path.isdir(_SL_SRC) and _SL_SRC not in sys.path:
     sys.path.insert(0, _SL_SRC)
 
+# pii_triage is a plain folder, not a pip-installed package -- hwe_scaled_ui.py only ever puts
+# it on a SPAWNED CHILD's PYTHONPATH (_tool_env), never its own sys.path. _collapse_legacy_pairs
+# needs `import pii_triage.legacy_pairs` in THIS (the UI's own) process, so make sure it resolves
+# here regardless of whether the UI process happened to import it first.
+_PII_PKG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pii_triage_merged")
+if os.path.isdir(_PII_PKG) and _PII_PKG not in sys.path:
+    sys.path.insert(0, _PII_PKG)
+
 
 # ── env-var specification for the Setup screen ────────────────────────────────
 # Split by WHO reads it (findings §7): the ops-VM UI host and the worker containers need different
@@ -230,38 +238,15 @@ def _epoch(dt) -> float | None:
 # conversion succeeds, a second post-conversion row forwarded to the Linux queue
 # (file_name="report.docx") that carries the real processing outcome/tokens/timing.
 # Counting both inflates "total files" / "completed" by one extra row per legacy file.
-_LEGACY_EXT_MAP = {".doc": ".docx", ".xls": ".xlsx", ".ppt": ".pptx"}
-
-
+# The actual collapsing logic lives in pii_triage.legacy_pairs (shared with
+# collect_outputs.py's dump_timing(), which has the same raw-row-count bug on its
+# TaskRecord list); this stays a thin, dict-shaped wrapper so nothing else here changes.
 def _collapse_legacy_pairs(ents: list) -> list:
-    """Collapse a Windows-leg pre-conversion row into its post-conversion counterpart so
-    per-state counts reflect actual input files, not Table rows (findings §6: "a Windows
-    .doc/.xls/.ppt produces two Table rows"). Table-only (no filesystem read, so this stays
-    cheap on every ~3s Monitor poll): the converted file_name is deterministic (stem +
-    docx/xlsx/pptx, matching conversion.py's _EXT_MAP), so a pair is recognised purely from
-    file_name -- if a legacy row's converted-name counterpart is ALSO present in this job,
-    the legacy row is dropped (the converted row is that file's true current state: still
-    pending/processing on the Linux leg, or completed/failed). A legacy row with NO
-    converted counterpart yet (conversion hasn't forwarded, or never will) is kept as-is --
-    it IS the file's current state.
-
-    Heuristic, like the "approximate" queue counts elsewhere in this module: a corpus that
-    happens to contain BOTH "x.doc" and an unrelated, genuinely distinct "x.docx" as separate
-    original files would see the ".doc" row collapsed away too. This trades a rare
-    false-collapse for a cheap, no-I/O check on every live poll; collect_outputs.py's
-    inventory (the deliverable) reconciles this authoritatively via the on-disk
-    forwarded.json/.orig.json sidecars instead.
-    """
-    file_names = {e.get("file_name", "") for e in ents}
-    out = []
-    for e in ents:
-        name = e.get("file_name", "")
-        stem, ext = os.path.splitext(name)
-        converted_ext = _LEGACY_EXT_MAP.get(ext.lower())
-        if converted_ext and (stem + converted_ext) in file_names:
-            continue  # this file's true state is the converted row, counted separately
-        out.append(e)
-    return out
+    """See pii_triage.legacy_pairs.collapse_legacy_pairs -- Table-only (no filesystem
+    read, so this stays cheap on every ~3s Monitor poll), heuristic like the
+    "approximate" queue counts elsewhere in this module."""
+    from pii_triage.legacy_pairs import collapse_legacy_pairs
+    return collapse_legacy_pairs(ents, name_of=lambda e: e.get("file_name", ""))
 
 
 def _live_processing(ents: list) -> list:
