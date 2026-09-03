@@ -44,11 +44,55 @@ def _iter_files(root: str):
             yield os.path.join(dirpath, name)
 
 
-def enqueue(files_dir: str, inventory_csv: str | None = None, exclude_lanes: set | None = None,
-            job_id: str | None = None, bde_threshold: int | None = None) -> int:
+def _chunked(iterable, size: int):
+    """Group a streamed iterable into lists of up to `size`, without materializing the
+    whole thing -- keeps enqueue's memory bounded on a few-hundred-thousand-file corpus
+    while still letting each chunk submit concurrently."""
+    chunk = []
+    for item in iterable:
+        chunk.append(item)
+        if len(chunk) >= size:
+            yield chunk
+            chunk = []
+    if chunk:
+        yield chunk
+
+
+def _enqueue_one(f: str, input_mount: str, keep, job_id: str, job_type: str,
+                 main_client, win_client) -> bool:
+    """Filter + submit ONE file's init_task + send_message. Returns True if it was actually
+    enqueued (False if filtered out by --inventory/--exclude-lanes). Raises on a genuine
+    Table/Queue failure -- the caller isolates that to this one file, not the whole run."""
     from scaling_lib.status import init_task
-    from scaling_lib.queue import _ensure_queues, _ensure_table, _get_queue_service, \
-        _build_message, _is_windows_file
+    from scaling_lib.queue import _build_message, _is_windows_file
+
+    rel = Path(f).relative_to(input_mount)
+    if keep is not None and rel.as_posix() not in keep:
+        return False
+    init_task(job_id, job_type, os.path.basename(f))
+    is_win = bool(win_client and _is_windows_file(Path(f)))
+    target = win_client if is_win else main_client
+    target.send_message(_build_message(rel, job_id, job_type, posix=not is_win))
+    return True
+
+
+def enqueue(files_dir: str, inventory_csv: str | None = None, exclude_lanes: set | None = None,
+            job_id: str | None = None, bde_threshold: int | None = None,
+            concurrency: int = 32, batch_size: int = 500) -> int:
+    """Enqueue every matching file, concurrently, in bounded batches.
+
+    A serial loop here means TWO network round-trips per file (init_task, send_message) --
+    for a few-hundred-thousand-file corpus that dominates enqueue wall time far more than the
+    directory walk itself. Chunking the streamed walk into batches and submitting each batch
+    through a thread pool (I/O-bound work, same reasoning as collect_outputs.py's own
+    ThreadPoolExecutor) cuts that down by roughly `concurrency`, while still bounding memory
+    to one batch at a time and reporting progress as it goes -- rather than materializing the
+    whole corpus list upfront, which would also defeat the point of the streaming walk below.
+    One bad file's Table/Queue error is isolated to that file (logged, skipped) rather than
+    aborting the entire enqueue.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from scaling_lib.queue import _ensure_queues, _ensure_table, _get_queue_service
 
     _ensure_queues()
     _ensure_table()
@@ -89,16 +133,30 @@ def enqueue(files_dir: str, inventory_csv: str | None = None, exclude_lanes: set
 
     seen = 0
     matched = 0
-    for f in _iter_files(files_dir):
-        seen += 1
-        rel = Path(f).relative_to(input_mount)
-        if keep is not None and rel.as_posix() not in keep:
-            continue
-        matched += 1
-        init_task(job_id, job_type, os.path.basename(f))
-        is_win = bool(win_client and _is_windows_file(Path(f)))
-        target = win_client if is_win else main_client
-        target.send_message(_build_message(rel, job_id, job_type, posix=not is_win))
+    failed = []
+    with ThreadPoolExecutor(max_workers=concurrency) as pool:
+        for batch in _chunked(_iter_files(files_dir), batch_size):
+            seen += len(batch)
+            futures = {
+                pool.submit(_enqueue_one, f, input_mount, keep, job_id, job_type,
+                           main_client, win_client): f
+                for f in batch
+            }
+            for fut in as_completed(futures):
+                f = futures[fut]
+                try:
+                    if fut.result():
+                        matched += 1
+                except Exception as exc:
+                    failed.append((f, exc))
+            sys.stderr.write(f"  ...{seen} discovered, {matched} enqueued so far\n")
+
+    if failed:
+        sys.stderr.write(f"warning: {len(failed)} file(s) failed to enqueue:\n")
+        for f, exc in failed[:10]:
+            sys.stderr.write(f"  {f}: {type(exc).__name__}: {exc}\n")
+        if len(failed) > 10:
+            sys.stderr.write(f"  ... and {len(failed) - 10} more\n")
 
     if matched == 0:
         sys.stderr.write("no files matched the filter -- nothing enqueued.\n")
@@ -128,6 +186,12 @@ if __name__ == "__main__":
     p.add_argument("--bde-threshold", type=int, default=None,
                    help="Per-job BDE entity threshold for the workers (writes <job_dir>/pii_job.json). "
                         "Omit to use the workers' BDE_THRESHOLD env default.")
+    p.add_argument("--concurrency", type=int, default=32,
+                   help="Parallel init_task+send_message calls (default: 32) -- raise this on a "
+                        "large corpus")
+    p.add_argument("--batch-size", type=int, default=500,
+                   help="Files per chunk submitted to the thread pool at once (default: 500) -- "
+                        "bounds memory on a very large corpus while still overlapping I/O")
     p.add_argument("--env-file", default=".env")
     a = p.parse_args()
 
@@ -135,4 +199,5 @@ if __name__ == "__main__":
     load_dotenv(a.env_file)
 
     exclude = {v.strip() for v in a.exclude_lanes.split(",") if v.strip()}
-    enqueue(a.files_dir, a.inventory_csv, exclude, a.job_id, a.bde_threshold)
+    enqueue(a.files_dir, a.inventory_csv, exclude, a.job_id, a.bde_threshold,
+           a.concurrency, a.batch_size)
