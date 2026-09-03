@@ -503,6 +503,57 @@ def _run_preflight_or_exit(cfg: Config) -> None:
         sys.exit(1)
 
 
+def _detect_cpu_quota(cgroup_root: str = "/sys/fs/cgroup") -> float | None:
+    """Best-effort read of THIS container's actual CPU allocation (vCPUs) straight from the
+    cgroup quota, e.g. Container Apps' `cpu=0.5`/`cpu=2` setting -- os.cpu_count() and
+    os.sched_getaffinity() both report the underlying NODE's core count, not a fractional
+    per-replica allocation, which would size concurrency for hardware this container was
+    never actually given a share of. Tries cgroup v2 (cpu.max) first, then v1
+    (cpu.cfs_quota_us / cpu.cfs_period_us). Returns None (caller falls back to a fixed
+    default) if neither is readable -- e.g. on the bare Windows VM, or outside a container.
+    `cgroup_root` is a parameter (not a hardcoded path) purely so this is testable without a
+    real cgroup filesystem.
+    """
+    try:
+        with open(os.path.join(cgroup_root, "cpu.max"), encoding="utf-8") as fh:
+            quota_str, period_str = fh.read().split()
+        if quota_str != "max":
+            return int(quota_str) / int(period_str)
+    except (OSError, ValueError):
+        pass
+    try:
+        with open(os.path.join(cgroup_root, "cpu", "cpu.cfs_quota_us"), encoding="utf-8") as fh:
+            quota = int(fh.read().strip())
+        with open(os.path.join(cgroup_root, "cpu", "cpu.cfs_period_us"), encoding="utf-8") as fh:
+            period = int(fh.read().strip())
+        if quota > 0:
+            return quota / period
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def _default_concurrency(cgroup_root: str = "/sys/fs/cgroup") -> int:
+    """Size WORKER_CONCURRENCY's default to this container's actual CPU allocation, instead
+    of a flat number -- "scale up" (more vCPU per replica) and "multi-thread within a
+    replica" should move together. More threads with no more CPU just adds contention on the
+    CPU-bound stages (regex detection, PDF parsing); a bigger container with the old flat
+    default of 4 left most of its extra CPU idle instead of turning into more throughput.
+
+    This workload is I/O-heavy (network waits for OCR/LLM, result.json reads/writes over
+    SMB/Azure Files) -- a thread waiting on I/O releases the GIL, so a thread count above raw
+    vCPU count still helps, hence the x2 factor rather than 1:1. Still fully overridable via
+    WORKER_CONCURRENCY; this is only the fallback when that env var is unset. Clamped to
+    [2, 16]: floors at 2 so an unknown/undetected allocation still gets some overlap, caps at
+    16 so a large container doesn't silently default to more threads than this I/O-to-CPU
+    ratio likely benefits from without an operator actually deciding that.
+    """
+    quota = _detect_cpu_quota(cgroup_root)
+    if quota is None:
+        return 4   # unknown allocation (e.g. the bare Windows VM, or unreadable cgroup files)
+    return max(2, min(16, round(quota * 2)))
+
+
 def main() -> None:
     global _cfg
 
@@ -549,11 +600,14 @@ def main() -> None:
     # I/O-bound work (network reads on OUTPUT_MOUNT/INPUT_MOUNT, OCR/LLM calls) releases the
     # GIL and genuinely overlaps across threads, so this is a real speed lever, not a no-op.
     # scaling-lib's own built-in default is 1 (effectively serial per container) unless
-    # WORKER_CONCURRENCY is set; ship a higher default here so a fresh deployment isn't
-    # accidentally single-threaded. Still fully overridable via WORKER_CONCURRENCY. Size it
-    # against your Azure OpenAI / Document Intelligence deployment's RPM -- concurrency times
-    # replica count is what actually hits those rate limits.
-    concurrency = int(os.environ.get("WORKER_CONCURRENCY") or 4)
+    # WORKER_CONCURRENCY is set; default here instead scales with the container's actual CPU
+    # allocation (see _default_concurrency) so a bigger container ("scale up") automatically
+    # gets more threads too, rather than leaving the extra vCPU idle behind a flat number.
+    # Still fully overridable via WORKER_CONCURRENCY. Size it against your Azure OpenAI /
+    # Document Intelligence deployment's RPM -- concurrency times replica count is what
+    # actually hits those rate limits.
+    concurrency = int(os.environ.get("WORKER_CONCURRENCY") or _default_concurrency())
+    logging.info("worker concurrency: %d", concurrency)
     Worker(concurrency=concurrency).run(process)
 
 

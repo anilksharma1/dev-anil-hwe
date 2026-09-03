@@ -246,5 +246,60 @@ class ResolveLogLevel(unittest.TestCase):
         self.assertEqual(worker._resolve_log_level("not-a-level"), logging.INFO)
 
 
+class CpuAwareConcurrency(unittest.TestCase):
+    """'Scale up' (more vCPU per replica) and 'multi-thread within a replica' should move
+    together -- default concurrency is sized off the container's actual cgroup CPU quota,
+    not a flat number that leaves a bigger container's extra vCPU idle."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.d, ignore_errors=True)
+
+    def _write(self, rel_path, content):
+        full = os.path.join(self.d, rel_path)
+        os.makedirs(os.path.dirname(full), exist_ok=True)
+        with open(full, "w", encoding="utf-8") as fh:
+            fh.write(content)
+
+    def test_cgroup_v2_quota_parsed(self):
+        self._write("cpu.max", "200000 100000\n")   # 2.0 vCPU
+        self.assertAlmostEqual(worker._detect_cpu_quota(self.d), 2.0)
+
+    def test_cgroup_v2_max_falls_through_to_v1_then_none(self):
+        self._write("cpu.max", "max 100000\n")   # unlimited -- not a real quota
+        self.assertIsNone(worker._detect_cpu_quota(self.d))
+
+    def test_cgroup_v1_quota_parsed(self):
+        self._write("cpu/cpu.cfs_quota_us", "50000\n")
+        self._write("cpu/cpu.cfs_period_us", "100000\n")   # 0.5 vCPU
+        self.assertAlmostEqual(worker._detect_cpu_quota(self.d), 0.5)
+
+    def test_v2_preferred_over_v1_when_both_present(self):
+        self._write("cpu.max", "400000 100000\n")   # 4.0 vCPU
+        self._write("cpu/cpu.cfs_quota_us", "50000\n")
+        self._write("cpu/cpu.cfs_period_us", "100000\n")
+        self.assertAlmostEqual(worker._detect_cpu_quota(self.d), 4.0)
+
+    def test_no_cgroup_files_returns_none(self):
+        self.assertIsNone(worker._detect_cpu_quota(self.d))
+
+    def test_default_concurrency_unknown_quota_falls_back_to_four(self):
+        self.assertEqual(worker._default_concurrency(self.d), 4)
+
+    def test_default_concurrency_scales_with_quota(self):
+        self._write("cpu.max", "800000 100000\n")   # 8.0 vCPU -> x2 = 16
+        self.assertEqual(worker._default_concurrency(self.d), 16)
+
+    def test_default_concurrency_floors_at_two(self):
+        self._write("cpu.max", "10000 100000\n")   # 0.1 vCPU -> x2 = 0.2, floored to 2
+        self.assertEqual(worker._default_concurrency(self.d), 2)
+
+    def test_default_concurrency_caps_at_sixteen(self):
+        self._write("cpu.max", "2000000 100000\n")   # 20 vCPU -> x2 = 40, capped to 16
+        self.assertEqual(worker._default_concurrency(self.d), 16)
+
+
 if __name__ == "__main__":
     unittest.main()
