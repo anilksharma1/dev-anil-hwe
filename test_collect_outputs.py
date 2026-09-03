@@ -10,6 +10,7 @@ Run:  python -m unittest test_collect_outputs -v
 import csv
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -125,6 +126,60 @@ class WatchStateSidecar(unittest.TestCase):
         with self.assertRaises(SystemExit) as ctx:
             co.watch(self.out, interval=0.01, max_iterations=1)
         self.assertEqual(ctx.exception.code, 2)
+
+
+class WatchPidLock(unittest.TestCase):
+    """Two --watch processes must never write to the same CSV at once."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.out = os.path.join(self.d, "inventory.csv")
+        import scaling_lib.status as sl_status
+        self.sl_status = sl_status
+        self._orig_fetch = sl_status._fetch_entities
+        self._orig_drained = co._is_drained
+        self.sl_status._fetch_entities = lambda status_filter=None, since=None: []
+        co._is_drained = lambda: True
+
+    def tearDown(self):
+        self.sl_status._fetch_entities = self._orig_fetch
+        co._is_drained = self._orig_drained
+        shutil.rmtree(self.d, ignore_errors=True)
+
+    def test_pid_alive_detects_this_own_process(self):
+        self.assertTrue(co._pid_alive(os.getpid()))
+
+    def test_pid_alive_false_for_a_pid_that_has_exited(self):
+        # Spawn a process, wait for it to exit, then its PID is (almost always) free.
+        p = subprocess.Popen([sys.executable, "-c", "pass"])
+        p.wait()
+        self.assertFalse(co._pid_alive(p.pid))
+
+    def test_refuses_second_watch_while_first_pid_alive(self):
+        with open(co._watch_pid_path(self.out), "w", encoding="utf-8") as fh:
+            fh.write(str(os.getpid()))   # this test process is very much alive
+        with self.assertRaises(SystemExit) as ctx:
+            co.watch(self.out, interval=0.01, max_iterations=1)
+        self.assertEqual(ctx.exception.code, 2)
+
+    def test_stale_pid_file_from_a_dead_process_is_ignored(self):
+        p = subprocess.Popen([sys.executable, "-c", "pass"])
+        p.wait()
+        with open(co._watch_pid_path(self.out), "w", encoding="utf-8") as fh:
+            fh.write(str(p.pid))
+        total = co.watch(self.out, interval=0.01)   # must NOT raise -- the old pid is dead
+        self.assertEqual(total, 0)
+
+    def test_pid_file_is_removed_on_clean_exit(self):
+        co.watch(self.out, interval=0.01)
+        self.assertFalse(os.path.exists(co._watch_pid_path(self.out)))
+
+    def test_restart_clears_a_stale_pid_file_too(self):
+        with open(co._watch_pid_path(self.out), "w", encoding="utf-8") as fh:
+            fh.write(str(os.getpid()))
+        # without --restart this would refuse; with it, the lock (and out/state) are wiped first
+        total = co.watch(self.out, interval=0.01, restart=True)
+        self.assertEqual(total, 0)
 
 
 class WatchLoop(unittest.TestCase):

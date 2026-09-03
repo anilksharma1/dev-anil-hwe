@@ -15,6 +15,7 @@ import csv
 import json
 import sys
 import os
+import subprocess
 import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "pii_triage_merged"))
@@ -360,6 +361,34 @@ def _save_watch_state(state_path: str, seen: set) -> None:
     os.replace(tmp, state_path)
 
 
+def _watch_pid_path(out_path: str) -> str:
+    return out_path + ".watch.pid"
+
+
+def _pid_alive(pid: int) -> bool:
+    """Best-effort, cross-platform 'is this PID still running'. On any doubt, says yes --
+    refusing to start a second watcher is the safe failure mode; a false "already running"
+    is a one-line --restart, but two writers racing on the same CSV is silent corruption."""
+    if not pid or pid <= 0:
+        return False
+    if os.name == "nt":
+        try:
+            out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"],
+                                 capture_output=True, text=True, timeout=10)
+            return str(pid) in (out.stdout or "")
+        except Exception:
+            return True
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except Exception:
+        return True
+
+
 def _is_drained() -> bool:
     """True once no row anywhere in the table is pending/processing. Table-wide, matching
     collect()'s own table-wide scope (there is no --job-id on collect)."""
@@ -430,11 +459,27 @@ def watch(out_path: str = "inventory.csv", interval: float = 15.0, concurrency: 
     `max_iterations` is a test hook; leave it None to run until drained/interrupted.
     """
     state_path = _watch_state_path(out_path)
+    pid_path = _watch_pid_path(out_path)
 
     if restart:
-        for p in (out_path, state_path):
+        for p in (out_path, state_path, pid_path):
             if os.path.exists(p):
                 os.remove(p)
+
+    if os.path.exists(pid_path):
+        old_pid = None
+        try:
+            old_pid = int(open(pid_path, encoding="utf-8").read().strip())
+        except (OSError, ValueError):
+            pass
+        if old_pid and _pid_alive(old_pid):
+            sys.stderr.write(
+                f"ERROR: a --watch process (pid {old_pid}) already appears to be running against "
+                f"'{out_path}' ({pid_path}).\n       Refusing to start a second one -- two writers "
+                f"appending to the same CSV would race.\n       If that process is actually gone, "
+                f"delete {pid_path} or pass --restart.\n")
+            raise SystemExit(2)
+        # stale lock (the prior watcher crashed/was killed without cleaning up) -- safe to continue
 
     if os.path.exists(out_path) and not os.path.exists(state_path):
         sys.stderr.write(
@@ -453,6 +498,9 @@ def watch(out_path: str = "inventory.csv", interval: float = 15.0, concurrency: 
     sys.stderr.write(f"watching for newly-completed files -> {out_path} "
                      f"(every {interval:.0f}s; resumed {len(seen)} already-seen row(s), "
                      f"{total_written} already-written record(s))\n")
+
+    with open(pid_path, "w", encoding="utf-8") as fh:
+        fh.write(str(os.getpid()))
 
     iterations = 0
     try:
@@ -477,6 +525,11 @@ def watch(out_path: str = "inventory.csv", interval: float = 15.0, concurrency: 
     except KeyboardInterrupt:
         sys.stderr.write(f"\ninterrupted -- {total_written} record(s) in {out_path} so far "
                          f"(state saved; rerun --watch to resume)\n")
+    finally:
+        try:
+            os.remove(pid_path)
+        except OSError:
+            pass
     return total_written
 
 

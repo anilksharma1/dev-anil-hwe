@@ -132,7 +132,7 @@ const esc = s => String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>'
 
 let ST = {screen:'setup', ctx:null, runs:[], runId:null, run:null, out:null, form:{mode:'job'},
           setup:null, monitor:null, monitorJob:null, poll:null, winTrack:null, lock:null, reset:null,
-          autoResultsFor:null};
+          autoResultsFor:null, collectLive:null, collectPoll:null};
 
 const NAV=[['setup','Setup'],['new','New run'],['runs','Runs'],['monitor','Monitor'],
            ['results','Results'],['score','vs manual review'],['compare','Compare runs'],
@@ -141,6 +141,7 @@ const NAV=[['setup','Setup'],['new','New run'],['runs','Runs'],['monitor','Monit
 function go(s){
   ST.screen=s;
   if(s!=='monitor'){ clearTimeout(ST.poll); ST.poll=null; }
+  if(s!=='results'){ clearTimeout(ST.collectPoll); ST.collectPoll=null; }
   if(s==='setup' && !ST.setup) loadSetup();
   if(s==='monitor') loadMonitor();
   if(s==='build') loadBuild();
@@ -295,15 +296,26 @@ S.results = () => {
   const R = ST.run;
   if(!R) return `<h1>Results</h1><p class="sub">No run selected — pick one from <b>Runs</b>.</p>`;
   const m=R.meta||{}, s=R.summary;
-  if(!s) return `<h1>${esc(m.name||m.id)}</h1>
-    <p class="sub">${m.external?'This historical run has no inventory under outputs/.':'This run isn\'t collected yet.'}</p>
+  if(!s){
+    const cl = ST.collectLive;
+    const live = cl && cl.watching;
+    return `<h1>${esc(m.name||m.id)}</h1>
+    <p class="sub">${m.external?'This historical run has no inventory under outputs/.'
+      :live?'Collecting live — results are landing as files complete, before the whole run drains.'
+      :'This run isn\'t collected yet.'}</p>
     <div class="card">${m.external?'Nothing to collect — external runs are read from their existing inventory.':`
-      Each worker wrote a <code>result.json</code> to OUTPUT_MOUNT. <b>Collect</b> gathers them into this
-      run's inventory — then Report, Score, and Export all work off it. Collect once the run is drained
-      (Monitor shows 100%).
-      <p style="margin:12px 0 0"><button class="btn pri" onclick="collectRun()">Collect outputs (save this run)</button></p>
+      Each worker wrote a <code>result.json</code> to OUTPUT_MOUNT. A background collector starts
+      automatically at submit and keeps this run's inventory current as files complete — Report,
+      Score, and Export can already work off a live, partial inventory; no need to wait for full drain.
+      ${live?`<div class="callout good" style="margin-top:12px"><b>${fmt(cl.rows)} record(s) so far</b> —
+        updated every few seconds (pid ${fmt(cl.pid)}).</div>`
+        :cl?`<div class="callout muted" style="margin-top:12px">Live collector is not running for this run
+        (exit code ${cl.exit_code!=null?fmt(cl.exit_code):'—'}). ${fmt(cl.rows)} record(s) currently in the
+        inventory.</div>`:''}
+      <p style="margin:12px 0 0"><button class="btn pri" onclick="collectRun()">Collect outputs now</button></p>
       ${ST.out?`<div class="cmd" style="margin-top:12px">${esc(ST.out.argv_str||'')}</div>
         <pre class="out" style="margin-top:8px">${esc(ST.out.out||'')}</pre>`:''}`}</div>`;
+  }
   const c=s.cost||{}, o=s.ocr||{}, d=s.decision||{}, t=s.tokens||{};
   const total=c.total_usd||0, lanes=Object.entries(s.lanes||{}).sort((a,b)=>b[1]-a[1]);
   const maxLane=Math.max(1,...lanes.map(([,v])=>v));
@@ -648,9 +660,29 @@ function renderTable(rows){
 const DEF = () => ST.ctx?.defaults || {price_per_1k_pages:9.5,price_per_1k_in:0.0003,price_per_1k_out:0.0003};
 
 async function open_(id){
-  ST.runId=id; ST.out=null;
+  ST.runId=id; ST.out=null; ST.collectLive=null;
   ST.run = await api('/api/run?id='+encodeURIComponent(id));
   go('results');
+  if(ST.run && !ST.run.has_inventory && !(ST.run.meta||{}).external) pollCollectStatus();
+}
+async function pollCollectStatus(){
+  // While a run's background --watch collector is live, poll its status so the Results screen
+  // shows a growing record count instead of nothing until the whole batch drains.
+  if(ST.screen!=='results') return;
+  const rid = ST.runId;
+  let st;
+  try{ st = await api('/api/collect/status?id='+encodeURIComponent(rid)); }
+  catch(e){ st = null; }
+  if(ST.screen!=='results' || ST.runId!==rid) return;   // navigated away / switched runs meanwhile
+  ST.collectLive = st;
+  if(st && !st.watching && (st.exists || st.exit_code!=null)){
+    // the watcher finished (drained) since we started polling -- load the now-complete inventory
+    ST.run = await api('/api/run?id='+encodeURIComponent(rid));
+    if(ST.screen==='results' && ST.runId===rid) draw();
+    return;   // stop polling; nothing left to watch
+  }
+  draw();
+  ST.collectPoll = setTimeout(pollCollectStatus, 5000);
 }
 async function collectRun(){
   ST.out={out:'collecting worker outputs…'}; draw();

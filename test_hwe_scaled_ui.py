@@ -12,6 +12,7 @@ Covers the brief's §8 requirements that apply to this phase:
 """
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -466,6 +467,19 @@ class ArchiveGuardsReset(unittest.TestCase):
         self.assertTrue(r["ok"])
         self.assertTrue(self.reset_called["v"])
 
+    def test_stops_any_live_watcher_before_archiving(self):
+        # Nothing should still be appending to this run's inventory once it's about to be cleared.
+        store.archive_job = lambda job_id, dest: {"job_id": job_id, "count": 1, "verified": True,
+                                                  "detail": "ok", "rows_path": dest, "metrics_path": dest}
+        orig_stop = ui.stop_watch
+        calls = []
+        ui.stop_watch = lambda rid: calls.append(rid)
+        try:
+            ui.archive_and_reset(self.rid, override=True, typed="J")
+        finally:
+            ui.stop_watch = orig_stop
+        self.assertEqual(calls, [self.rid])
+
 
 class InputMountCheck(unittest.TestCase):
     def _under(self, mount, path):
@@ -648,6 +662,128 @@ class ScoreSummaryParser(unittest.TestCase):
     def test_missing_block_is_empty(self):
         self.assertEqual(ui.parse_score_summary("nothing here"), {})
         self.assertEqual(ui.parse_score_summary(""), {})
+
+
+class LiveCollectorWatcher(unittest.TestCase):
+    """start_watch/stop_watch/watch_status -- the background --watch process the UI now spawns
+    right after submit, instead of only collecting once the whole batch drains. Uses trivial
+    dummy subprocesses (not a real collect_outputs.py run) so this needs no Azure access."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.inv = os.path.join(self.d, "inventory.csv")
+        self._orig_watchers = dict(ui.WATCHERS)
+        ui.WATCHERS.clear()
+
+    def tearDown(self):
+        for entry in list(ui.WATCHERS.values()):
+            try:
+                entry["proc"].terminate()
+                entry["proc"].wait(timeout=2)
+            except Exception:
+                pass
+        ui.WATCHERS.clear()
+        ui.WATCHERS.update(self._orig_watchers)
+        shutil.rmtree(self.d, ignore_errors=True)
+
+    def test_watch_status_when_nothing_was_ever_started(self):
+        st = ui.watch_status("nope", self.inv)
+        self.assertFalse(st["watching"])
+        self.assertEqual(st["rows"], 0)
+        self.assertFalse(st["exists"])
+
+    def test_watch_status_reflects_a_live_process(self):
+        proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(5)"])
+        ui.WATCHERS["R1"] = {"proc": proc, "log": "x", "out": self.inv, "started_at": ui.now_iso()}
+        try:
+            st = ui.watch_status("R1", self.inv)
+            self.assertTrue(st["watching"])
+            self.assertEqual(st["pid"], proc.pid)
+        finally:
+            proc.terminate(); proc.wait(timeout=2)
+
+    def test_start_watch_reports_already_running_instead_of_duplicating(self):
+        proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(5)"])
+        ui.WATCHERS["R2"] = {"proc": proc, "log": "x", "out": self.inv, "started_at": ui.now_iso()}
+        try:
+            res = ui.start_watch("R2", self.inv)
+            self.assertTrue(res["already_running"])
+            self.assertEqual(res["pid"], proc.pid)
+        finally:
+            proc.terminate(); proc.wait(timeout=2)
+
+    def test_stop_watch_terminates_and_removes_from_registry(self):
+        proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+        ui.WATCHERS["R3"] = {"proc": proc, "log": "x", "out": self.inv, "started_at": ui.now_iso()}
+        ui.stop_watch("R3")
+        self.assertNotIn("R3", ui.WATCHERS)
+        self.assertIsNotNone(proc.poll())   # actually terminated, not just forgotten
+
+    def test_stop_watch_on_an_unknown_run_is_a_safe_no_op(self):
+        ui.stop_watch("no-such-run")   # must not raise
+
+    def test_watch_status_reports_exit_code_once_the_process_ends(self):
+        proc = subprocess.Popen([sys.executable, "-c", "pass"])
+        proc.wait()
+        ui.WATCHERS["R4"] = {"proc": proc, "log": "x", "out": self.inv, "started_at": ui.now_iso()}
+        st = ui.watch_status("R4", self.inv)
+        self.assertFalse(st["watching"])
+        self.assertEqual(st["exit_code"], 0)
+
+    def test_watch_status_rows_reads_from_disk_not_memory(self):
+        with open(self.inv, "w", encoding="utf-8", newline="") as fh:
+            fh.write("rel_path\na.pdf\nb.pdf\n")
+        st = ui.watch_status("nothing-tracked", self.inv)
+        self.assertEqual(st["rows"], 2)
+
+
+class SubmitRunStartsLiveCollector(unittest.TestCase):
+    """submit_run() must start the live watcher -- the actual fix for 'no output until the whole
+    batch completes'. enqueue.py/az calls are stubbed; nothing here touches Azure."""
+
+    def setUp(self):
+        self.mount = tempfile.mkdtemp()
+        self.job_dir = os.path.join(self.mount, "job1")
+        os.makedirs(os.path.join(self.job_dir, "files"))
+        with open(os.path.join(self.job_dir, "files", "a.txt"), "w", encoding="utf-8") as fh:
+            fh.write("x")
+        self._orig_input_mount = os.environ.get("INPUT_MOUNT")
+        os.environ["INPUT_MOUNT"] = self.mount
+        self._orig_run_tool = ui.run_tool
+        self._orig_active_run = ui.active_run
+        self._orig_start_watch = ui.start_watch
+        ui.run_tool = lambda argv, timeout=None: {"ok": True, "exit": 0, "out": ""}
+        ui.active_run = lambda: None
+        self.watch_calls = []
+        ui.start_watch = lambda rid, inv: (self.watch_calls.append((rid, inv)),
+                                           {"ok": True, "started": True})[1]
+        ui.COUNT_CACHE.clear()
+        self.run_id = None
+
+    def tearDown(self):
+        if self._orig_input_mount is None:
+            os.environ.pop("INPUT_MOUNT", None)
+        else:
+            os.environ["INPUT_MOUNT"] = self._orig_input_mount
+        ui.run_tool = self._orig_run_tool
+        ui.active_run = self._orig_active_run
+        ui.start_watch = self._orig_start_watch
+        shutil.rmtree(self.mount, ignore_errors=True)
+        if self.run_id:
+            shutil.rmtree(ui._run_dir(self.run_id), ignore_errors=True)
+        try:
+            os.remove(ui.LOCK_PATH)
+        except OSError:
+            pass
+
+    def test_submit_run_starts_a_watcher_for_the_new_run(self):
+        res = ui.submit_run(self.job_dir)
+        self.run_id = res.get("id")
+        self.assertTrue(res["ok"], res)
+        self.assertEqual(len(self.watch_calls), 1)
+        rid, inv = self.watch_calls[0]
+        self.assertEqual(rid, res["id"])
+        self.assertTrue(inv.endswith("inventory.csv"))
 
 
 class LoopbackOnly(unittest.TestCase):

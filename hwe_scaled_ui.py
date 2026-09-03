@@ -442,6 +442,81 @@ def build_collect_argv(out_csv: str) -> list:
     return [sys.executable, os.path.join(ROOT, "collect_outputs.py"), "--out", out_csv]
 
 
+def build_collect_watch_argv(out_csv: str, interval: float = 15.0) -> list:
+    return [sys.executable, os.path.join(ROOT, "collect_outputs.py"),
+            "--out", out_csv, "--watch", "--interval", str(interval)]
+
+
+# ------------------------------------------------------------------ live collection (--watch)
+# Auto-started right after submit, so results accumulate into runs/<id>/inventory.csv as files
+# complete -- instead of the old "nothing until the whole batch drains" behaviour, where a bad
+# run late in a long batch meant zero partial output and a full rework. One background
+# collect_outputs.py --watch subprocess per run_id; the UI only ever holds the live Popen handle
+# for it (same "in-memory state = only processes we started" rule as everything else here). The
+# subprocess itself is protected against a second writer (its own <out>.watch.pid lock, in
+# collect_outputs.py) -- load-bearing here specifically because a UI restart loses this dict but
+# NOT the still-running background process, so a naive re-start-on-every-submit-check would
+# otherwise race two writers on the same file.
+WATCHERS: dict = {}
+_WATCH_LOCK = threading.Lock()
+
+
+def start_watch(run_id: str, out_csv: str) -> dict:
+    """Start a background --watch collector for this run, or report one is already running."""
+    with _WATCH_LOCK:
+        existing = WATCHERS.get(run_id)
+        if existing and existing["proc"].poll() is None:
+            return {"ok": True, "started": False, "already_running": True, "pid": existing["proc"].pid}
+        os.makedirs(os.path.dirname(out_csv), exist_ok=True)
+        log_path = os.path.join(os.path.dirname(out_csv), "collect_watch.log")
+        argv = build_collect_watch_argv(out_csv)
+        try:
+            log_fh = open(log_path, "a", encoding="utf-8")
+            log_fh.write(f"\n--- watch started {now_iso()} by {whoami()} ---\n{' '.join(_q(x) for x in argv)}\n")
+            log_fh.flush()
+            proc = subprocess.Popen(argv, cwd=ROOT, env=_tool_env(),
+                                    stdout=log_fh, stderr=subprocess.STDOUT)
+        except Exception as exc:
+            return {"ok": False, "why": f"{type(exc).__name__}: {exc}"}
+        WATCHERS[run_id] = {"proc": proc, "log": log_path, "out": out_csv, "started_at": now_iso()}
+        return {"ok": True, "started": True, "pid": proc.pid}
+
+
+def stop_watch(run_id: str, timeout: float = 5.0) -> None:
+    """Best-effort stop of a run's background watcher -- e.g. before archiving/resetting it, so
+    nothing keeps appending to a run directory that is about to be cleared."""
+    with _WATCH_LOCK:
+        entry = WATCHERS.pop(run_id, None)
+    if not entry:
+        return
+    proc = entry["proc"]
+    if proc.poll() is None:
+        try:
+            proc.terminate()
+            proc.wait(timeout=timeout)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
+
+def watch_status(run_id: str, inv: str) -> dict:
+    """Live status for the Results screen: is a watcher running, how many rows so far, and (once
+    it exits) how it ended. Row count is read straight from disk, so this stays correct even
+    across a UI restart that lost the in-memory WATCHERS entry."""
+    rows = _row_count(inv) if os.path.isfile(inv) else 0
+    entry = WATCHERS.get(run_id)
+    if not entry:
+        return {"watching": False, "rows": rows, "exists": os.path.isfile(inv)}
+    rc = entry["proc"].poll()
+    status = {"watching": rc is None, "rows": rows, "exists": os.path.isfile(inv),
+              "pid": entry["proc"].pid, "started_at": entry["started_at"], "log": entry["log"]}
+    if rc is not None:
+        status["exit_code"] = rc
+    return status
+
+
 def build_report_argv(inventory: str, out_csv: str) -> list:
     return [sys.executable, "-m", "pii_triage", "report", inventory, "--out", out_csv]
 
@@ -1021,6 +1096,11 @@ def submit_run(job_dir: str, mode: str = "job", name: str = "",
     jdump(os.path.join(rundir, "run.json"), meta)
     acquire_lock(run_id, job_id, v["job_dir"])
     audit("submit", run_id=run_id, job_id=job_id, files=chk["files"], windows=chk["windows_count"], mode=mode)
+    watch_res = start_watch(run_id, meta["inventory"])
+    if not watch_res.get("ok"):
+        # Never let the convenience live-collector block a real submission -- the manual
+        # /api/collect fallback still works once the run drains.
+        audit("watch_start_failed", run_id=run_id, job_id=job_id, why=watch_res.get("why"))
     return {"ok": True, "id": run_id, "job_id": job_id, "windows_count": chk["windows_count"],
             "argv_str": argv_str, "out": res["out"]}
 
@@ -1031,6 +1111,7 @@ def archive_and_reset(run_id: str, override: bool = False, typed: str = "") -> d
     (2) requires typing the job_id, (3) ARCHIVES + verifies the table rows first — for the run AND
     any other jobs present, since reset is table-wide — and (4) only then clears, releasing the lock
     and writing an audit entry. If the archive does not verify, it refuses to reset."""
+    stop_watch(run_id)   # nothing should still be appending to this run's inventory once we archive it
     meta = resolve_run(run_id)
     if not meta:
         # run.json was deleted manually, but the active-run lock still holds this run's
@@ -1232,6 +1313,22 @@ class H(http.server.BaseHTTPRequestHandler):
         if route == "/api/stage/status":
             st = stage_status((q.get("id") or [""])[0])
             return self._json(st or {"error": "unknown staging job"})
+        if route == "/api/collect/status":
+            # Polled from the Results screen while a run's background --watch collector is
+            # (or was) live, so a growing inventory shows up without waiting for a manual Collect.
+            rid = (q.get("id") or [""])[0]
+            m0 = resolve_run(rid)
+            if not m0:
+                return self._json({"error": "unknown run"}, 404)
+            inv = m0.get("inventory") or os.path.join(_run_dir(rid), "inventory.csv")
+            live = watch_status(rid, inv)
+            if not live["watching"] and "exit_code" in live and m0.get("status") != "collected":
+                # the watcher finished on its own (queue drained) since we last checked -- record it
+                m = jload(meta_path(rid)) or {}
+                if m:
+                    m.update({"status": "collected", "collected_at": now_iso()})
+                    jdump(meta_path(rid), m)
+            return self._json(live)
         if route == "/api/build/preflight":
             return self._json(build_preflight())
         if route == "/api/runs":
@@ -1283,14 +1380,23 @@ class H(http.server.BaseHTTPRequestHandler):
         rid = b.get("id") or ""
         meta = resolve_run(rid)
         if route == "/api/collect":
-            # "Save this run": gather the workers' result.json into the run's inventory. Gated on the
-            # run being drained (findings Q9: collect on a live queue yields a silently-partial file).
+            # "Save this run": gather the workers' result.json into the run's inventory. A live
+            # --watch collector is normally already running for this run (started at submit) and
+            # keeps the inventory current as files complete -- if so, report its status instead of
+            # launching a second, conflicting writer. Only fall back to the old one-shot path (gated
+            # on the run being drained -- findings Q9: collecting on a live queue yields a silently-
+            # partial file) when no watcher is running: an external run, a submit-time watch-start
+            # failure, or a UI restart after the watcher already finished.
             if not meta:
                 return self._json({"ok": False, "out": "unknown run"}, 404)
             if meta.get("external"):
                 return self._json({"ok": False, "out": "this is a historical run — already collected"})
             job_id = meta.get("job_id")
             inv = meta.get("inventory") or os.path.join(_run_dir(rid), "inventory.csv")
+            live = watch_status(rid, inv)
+            if live["watching"]:
+                return self._json({"ok": True, "out": f"collecting live — {live['rows']} record(s) so far",
+                                   "watching": True, "rows_written": live["rows"]})
             try:
                 open_n = _store().job_open_count(job_id) if job_id else 0
             except Exception as exc:
