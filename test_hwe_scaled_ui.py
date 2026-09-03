@@ -786,6 +786,65 @@ class SubmitRunStartsLiveCollector(unittest.TestCase):
         self.assertTrue(inv.endswith("inventory.csv"))
 
 
+class DlqEvents(unittest.TestCase):
+    """Gap 7: store.dlq_events() reads worker.py's circuit-breaker trip markers, so a stalled
+    run has a visible reason on Monitor instead of nothing."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.events_dir = os.path.join(self.d, "_events")
+        os.makedirs(self.events_dir)
+        self._orig_output_mount = os.environ.get("OUTPUT_MOUNT")
+        os.environ["OUTPUT_MOUNT"] = self.d
+
+    def tearDown(self):
+        if self._orig_output_mount is None:
+            os.environ.pop("OUTPUT_MOUNT", None)
+        else:
+            os.environ["OUTPUT_MOUNT"] = self._orig_output_mount
+        shutil.rmtree(self.d, ignore_errors=True)
+
+    def _write(self, name, payload):
+        import json as _json
+        with open(os.path.join(self.events_dir, name), "w", encoding="utf-8") as fh:
+            _json.dump(payload, fh)
+
+    def test_no_events_dir_returns_empty(self):
+        shutil.rmtree(self.events_dir)
+        self.assertEqual(store.dlq_events(), [])
+
+    def test_reads_back_a_written_event(self):
+        self._write("dlq_trip_host1_1.json",
+                    {"type": "dlq_circuit_breaker", "at": "2026-01-01T00:00:00Z",
+                     "worker_instance": "host1", "dlq_growth": 6, "completions": 100,
+                     "rate": 0.06, "threshold": 0.05})
+        events = store.dlq_events()
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["worker_instance"], "host1")
+
+    def test_sorted_most_recent_first(self):
+        self._write("dlq_trip_host1_1.json", {"at": "2026-01-01T00:00:00Z"})
+        self._write("dlq_trip_host2_2.json", {"at": "2026-01-02T00:00:00Z"})
+        events = store.dlq_events()
+        self.assertEqual([e["at"] for e in events], ["2026-01-02T00:00:00Z", "2026-01-01T00:00:00Z"])
+
+    def test_malformed_event_file_is_skipped_not_raised(self):
+        with open(os.path.join(self.events_dir, "dlq_trip_bad_1.json"), "w", encoding="utf-8") as fh:
+            fh.write("{not json")
+        self._write("dlq_trip_good_2.json", {"at": "2026-01-01T00:00:00Z"})
+        events = store.dlq_events()   # must not raise
+        self.assertEqual(len(events), 1)
+
+    def test_old_event_excluded_by_max_age(self):
+        import time as _time
+        path = os.path.join(self.events_dir, "dlq_trip_old_1.json")
+        self._write("dlq_trip_old_1.json", {"at": "2020-01-01T00:00:00Z"})
+        old_time = _time.time() - 48 * 3600
+        os.utime(path, (old_time, old_time))
+        events = store.dlq_events(max_age_hours=24.0)
+        self.assertEqual(events, [])
+
+
 class LoopbackOnly(unittest.TestCase):
     def test_server_binds_loopback(self):
         srv = ui.Server(("127.0.0.1", 0), ui.H)

@@ -253,6 +253,14 @@ S.monitor = () => {
     crashed worker's claim that must expire, or those documents are lost silently.
     <div class="detail" style="font-family:var(--mono);font-size:11.5px;margin-top:6px;color:var(--ink-3)">${m.stuck.slice(0,8).map(s=>esc(s.file_name)+' · '+fmt(s.age_s)+'s · '+esc(s.worker_instance)).join('<br>')}</div></div>`:''}
 
+  ${(m.dlq_events||[]).length?`<div class="callout alarm" style="margin-top:14px">
+    <b>Worker circuit breaker tripped ${fmt(m.dlq_events.length)} time(s) recently.</b>
+    Dead-letter growth exceeded its threshold, so one or more workers deliberately self-terminated
+    as back-pressure (this is intentional, not a crash — the in-flight task was requeued) — this is
+    why the run may be slow or replicas keep restarting. Investigate the dead-lettered files below
+    before letting it keep grinding through the same poison messages.
+    <div class="detail" style="font-family:var(--mono);font-size:11.5px;margin-top:6px;color:var(--ink-3)">${m.dlq_events.slice(0,8).map(e=>esc(e.at||'')+' · '+esc(e.worker_instance||'')+' · '+fmt(e.dlq_growth)+' new dead-letter(s) over '+fmt(e.completions)+' completion(s) ('+(e.rate!=null?(e.rate*100).toFixed(1):'?')+'% vs '+((e.threshold||0)*100).toFixed(0)+'% threshold)').join('<br>')}</div></div>`:''}
+
   ${(m.processing_tasks||[]).length?`<h2>In progress right now (${fmt(m.processing_tasks.length)})</h2>
     <div class="card"><div class="tblwrap"><table><thead><tr><th>File</th><th>Worker</th>
     <th class="n">Attempt</th><th class="n">Elapsed</th></tr></thead><tbody>

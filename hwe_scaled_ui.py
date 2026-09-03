@@ -768,6 +768,10 @@ def monitor_payload(job_id: str) -> dict:
         m["queues"] = {"error": f"{type(exc).__name__}: {exc}"}
     m["failures"] = store.failures(job_id)
     m["visibility_timeout_s"] = vis
+    try:
+        m["dlq_events"] = store.dlq_events()
+    except Exception:
+        m["dlq_events"] = []
     # throughput_fpm + eta_range_min are computed in job_metrics (trailing window, guarded).
     return m
 

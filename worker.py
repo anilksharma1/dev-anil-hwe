@@ -42,6 +42,35 @@ _worker_completions: int = 0
 _worker_completions_lock = threading.Lock()
 
 
+def _write_dlq_trip_event(dlq_growth: int, done: int, rate: float) -> None:
+    """Durable, UI-visible record of a circuit-breaker trip.
+
+    logging.critical() alone is invisible to an operator by design here -- worker logs are
+    deliberately not tailed in the UI (they're a Log Analytics query across ~N replicas), so
+    without this an operator just sees the run stall/slow, with no reason why, exactly the
+    complaint this fixes. OUTPUT_MOUNT is already the one thing every worker AND the ops-VM
+    UI can both read, so a small JSON marker there (no new Azure resource, nothing to
+    provision) is enough for hwe_scaled_store.dlq_events() to surface as a Monitor alert.
+    Best-effort: a failure to write this must never turn into a reason NOT to trip the
+    breaker, so it's wrapped and swallowed by the caller.
+    """
+    import socket
+    events_dir = Path(os.environ.get("OUTPUT_MOUNT", ".")) / "_events"
+    events_dir.mkdir(parents=True, exist_ok=True)
+    host = socket.gethostname()
+    ts_ms = int(time.time() * 1000)
+    event = {
+        "type": "dlq_circuit_breaker", "at": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + "Z",
+        "worker_instance": host, "dlq_growth": dlq_growth, "completions": done,
+        "rate": round(dlq_growth / done, 4) if done else None, "threshold": _DLQ_FAILURE_RATE,
+        "pid": os.getpid(),
+    }
+    path = events_dir / f"dlq_trip_{host}_{ts_ms}.json"
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(event), encoding="utf-8")
+    tmp.replace(path)
+
+
 def _dlq_monitor(baseline_dlq: int) -> None:
     """Daemon thread: exit if dead-letter growth rate exceeds the threshold.
 
@@ -66,6 +95,10 @@ def _dlq_monitor(baseline_dlq: int) -> None:
                 "exceeds %.0f%% threshold — stopping worker",
                 dlq_growth, done, 100.0 * dlq_growth / done, 100.0 * _DLQ_FAILURE_RATE,
             )
+            try:
+                _write_dlq_trip_event(dlq_growth, done, _DLQ_FAILURE_RATE)
+            except Exception:
+                logging.warning("DLQ monitor: failed to write the trip event file", exc_info=True)
             os._exit(1)
 
 

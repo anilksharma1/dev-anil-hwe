@@ -92,5 +92,42 @@ class ConvertAndForward(unittest.TestCase):
         self.assertEqual(seen["timeout_s"], 7)
 
 
+class DlqTripEvent(unittest.TestCase):
+    """Gap 7: a circuit-breaker trip must leave a durable, UI-readable reason -- worker logs
+    alone are invisible to the operator by this UI's own design."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self._orig_output_mount = os.environ.get("OUTPUT_MOUNT")
+        os.environ["OUTPUT_MOUNT"] = self.d
+
+    def tearDown(self):
+        if self._orig_output_mount is None:
+            os.environ.pop("OUTPUT_MOUNT", None)
+        else:
+            os.environ["OUTPUT_MOUNT"] = self._orig_output_mount
+        shutil.rmtree(self.d, ignore_errors=True)
+
+    def test_writes_a_readable_json_event_under_events_dir(self):
+        worker._write_dlq_trip_event(dlq_growth=12, done=100, rate=0.05)
+        events_dir = Path(self.d) / "_events"
+        files = list(events_dir.glob("dlq_trip_*.json"))
+        self.assertEqual(len(files), 1)
+        ev = json.loads(files[0].read_text(encoding="utf-8"))
+        self.assertEqual(ev["type"], "dlq_circuit_breaker")
+        self.assertEqual(ev["dlq_growth"], 12)
+        self.assertEqual(ev["completions"], 100)
+        self.assertAlmostEqual(ev["rate"], 0.12)
+        self.assertIn("worker_instance", ev)
+        self.assertIn("at", ev)
+
+    def test_zero_completions_does_not_raise_and_rate_is_null(self):
+        worker._write_dlq_trip_event(dlq_growth=0, done=0, rate=0.05)
+        events_dir = Path(self.d) / "_events"
+        files = list(events_dir.glob("dlq_trip_*.json"))
+        ev = json.loads(files[0].read_text(encoding="utf-8"))
+        self.assertIsNone(ev["rate"])
+
+
 if __name__ == "__main__":
     unittest.main()

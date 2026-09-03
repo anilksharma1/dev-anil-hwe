@@ -391,6 +391,42 @@ def failures(job_id: str) -> list:
     return out
 
 
+def dlq_events(max_age_hours: float = 24.0, limit: int = 20) -> list:
+    """Recent DLQ circuit-breaker trips (worker.py's _write_dlq_trip_event), so a run that
+    stalls because workers keep self-terminating under dead-letter back-pressure shows an
+    actual reason on Monitor instead of nothing -- worker logs are deliberately not tailed in
+    this UI (they're a Log Analytics query across every replica), so without this the operator
+    had no way to see it here at all.
+
+    Read straight off OUTPUT_MOUNT/_events/ -- the one place every worker AND this ops-VM
+    process can both reach, so no new Azure resource is needed. Fleet-wide, not job-scoped
+    (a circuit-breaker trip isn't tied to one job_id). Best-effort: an unreadable/malformed
+    event file is skipped, never raised; there is deliberately no retention/cleanup of these
+    small marker files yet -- they accumulate under _events/ until an operator clears them.
+    """
+    out_mount = os.environ.get("OUTPUT_MOUNT", "")
+    events_dir = os.path.join(out_mount, "_events") if out_mount else ""
+    if not events_dir or not os.path.isdir(events_dir):
+        return []
+    import glob
+    import json as _json
+    import time as _time
+    cutoff = _time.time() - max_age_hours * 3600
+    events = []
+    for path in glob.glob(os.path.join(events_dir, "dlq_trip_*.json")):
+        try:
+            if os.path.getmtime(path) < cutoff:
+                continue
+            with open(path, "r", encoding="utf-8") as fh:
+                ev = _json.load(fh)
+            ev["_file"] = os.path.basename(path)
+            events.append(ev)
+        except (OSError, ValueError):
+            continue
+    events.sort(key=lambda e: e.get("at", ""), reverse=True)
+    return events[:limit]
+
+
 # ── pure helper: task-level concurrency sweep ─────────────────────────────────
 def concurrency_series(intervals) -> list:
     """Sweep [start,end) intervals into a (t, active) series. CLOSE BEFORE OPEN at equal timestamps
