@@ -882,6 +882,48 @@ class PreflightEvents(unittest.TestCase):
         self.assertEqual(store.preflight_events(), [])
 
 
+class RunOutcomeCapture(unittest.TestCase):
+    """Gap 5: 'what all processed / what didn't' must be captured from the live table at
+    collect time and persisted into run.json, so it survives a later table-wide reset."""
+
+    def setUp(self):
+        self.rid = "__test_outcome_capture__"
+        self.d = ui._run_dir(self.rid)
+        ui.jdump(ui.meta_path(self.rid), {"id": self.rid, "job_id": "J"})
+        self._orig_job_metrics = store.job_metrics
+        self._orig_failures = store.failures
+
+    def tearDown(self):
+        store.job_metrics = self._orig_job_metrics
+        store.failures = self._orig_failures
+        shutil.rmtree(self.d, ignore_errors=True)
+
+    def test_captures_counts_and_failures_into_run_json(self):
+        store.job_metrics = lambda job_id, visibility_timeout=None: {
+            "total": 10, "files_completed": 7, "files_pending": 1, "files_processing": 0,
+            "files_failed": 2, "files_retried": 1,
+        }
+        store.failures = lambda job_id: [
+            {"file_name": "a.pdf", "status": "failed", "error_message": "boom"},
+        ]
+        outcome = ui.capture_run_outcome(self.rid, "J")
+        self.assertEqual(outcome["completed"], 7)
+        self.assertEqual(outcome["failed"], 2)
+        self.assertEqual(len(outcome["failures"]), 1)
+
+        persisted = ui.jload(ui.meta_path(self.rid))
+        self.assertEqual(persisted["outcome"]["completed"], 7)
+
+    def test_no_job_id_returns_none_without_raising(self):
+        self.assertIsNone(ui.capture_run_outcome(self.rid, None))
+
+    def test_store_failure_returns_none_without_raising(self):
+        def boom(job_id, visibility_timeout=None):
+            raise RuntimeError("table unreachable")
+        store.job_metrics = boom
+        self.assertIsNone(ui.capture_run_outcome(self.rid, "J"))
+
+
 class AuditTrail(unittest.TestCase):
     """Gap 9: the audit trail must actually be readable, not just a file nobody opens; and it
     must cover every action this UI takes, not just submit/reset."""

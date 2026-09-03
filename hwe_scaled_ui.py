@@ -517,6 +517,35 @@ def watch_status(run_id: str, inv: str) -> dict:
     return status
 
 
+def capture_run_outcome(rid: str, job_id: str) -> dict | None:
+    """Persist a compact 'what processed / what didn't' summary into this run's run.json,
+    while the live status table still has the answer -- table-wide reset, or simply enough
+    time passing, can make this unrecoverable otherwise. Gap: 'active/historical runs ...
+    what all processed/what didn't'. Safe to call more than once (each call refreshes it);
+    best-effort -- a failure to read the store must never break the caller (collect, or the
+    watcher-finished check)."""
+    if not job_id:
+        return None
+    try:
+        store = _store()
+        m = store.job_metrics(job_id)
+        fails = store.failures(job_id)
+    except Exception:
+        return None
+    outcome = {
+        "captured_at": now_iso(),
+        "total": m.get("total"), "completed": m.get("files_completed"),
+        "pending": m.get("files_pending"), "processing": m.get("files_processing"),
+        "failed": m.get("files_failed"), "retried": m.get("files_retried"),
+        "failures": fails[:50],   # file id + status + error class only, never document text
+    }
+    meta = jload(meta_path(rid)) or {}
+    if meta:
+        meta["outcome"] = outcome
+        jdump(meta_path(rid), meta)
+    return outcome
+
+
 def build_report_argv(inventory: str, out_csv: str) -> list:
     return [sys.executable, "-m", "pii_triage", "report", inventory, "--out", out_csv]
 
@@ -1360,6 +1389,7 @@ class H(http.server.BaseHTTPRequestHandler):
                 if m:
                     m.update({"status": "collected", "collected_at": now_iso()})
                     jdump(meta_path(rid), m)
+                capture_run_outcome(rid, m0.get("job_id"))
             return self._json(live)
         if route == "/api/build/preflight":
             return self._json(build_preflight())
@@ -1449,6 +1479,7 @@ class H(http.server.BaseHTTPRequestHandler):
                 if m:
                     m.update({"status": "collected", "collected_at": now_iso()})
                     jdump(meta_path(rid), m)
+                capture_run_outcome(rid, job_id)
             audit("collect", run_id=rid, ok=res.get("ok"), rows_written=res.get("rows_written"))
             return self._json(res)
 

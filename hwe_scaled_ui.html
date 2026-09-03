@@ -155,6 +155,23 @@ const tile=(lab,val,dl)=>`<div class="tile"><div class="lab">${lab}</div>
 const monoTile=(lab,val,dl)=>`<div class="tile"><div class="lab">${lab}</div>
   <div class="val mono">${val}</div>${dl?`<div class="dl">${dl}</div>`:''}</div>`;
 
+// 'what all processed / what didn't', captured from the live status table at collect time so
+// it survives even after a table-wide reset (Gap 5) -- absent for a run collected before this
+// existed, or an external run with no live job_id to have captured it from.
+function outcomeCallout(outcome){
+  if(!outcome) return '';
+  const failed=(outcome.failed||0), pending=(outcome.pending||0)+(outcome.processing||0);
+  const cls = failed?'alarm':(pending?'muted':'good');
+  const fails = outcome.failures||[];
+  return `<div class="callout ${cls}" style="margin:10px 0 16px">
+    <b>${fmt(outcome.completed||0)} completed</b> · ${fmt(failed)} failed/dead-lettered
+    · ${fmt(pending)} still pending/processing at last capture
+    <span style="color:var(--ink-3)">(captured ${esc((outcome.captured_at||'').replace('T',' ').slice(0,16))})</span>
+    ${fails.length?`<div class="detail" style="font-family:var(--mono);font-size:11.5px;margin-top:6px">
+      ${fails.slice(0,10).map(f=>esc(f.file_name)+' · '+esc(f.status)+' · '+esc(f.error_message||'')).join('<br>')}
+      ${fails.length>10?`<br>… and ${fmt(fails.length-10)} more`:''}</div>`:''}</div>`;
+}
+
 /* ---------------------------------------------------------------- screens */
 const S={};
 
@@ -356,6 +373,7 @@ S.results = () => {
     ${m.external?'<span class="pill ext"><i class="dot"></i>external</span>':'<span class="pill done"><i class="dot"></i>this UI</span>'}</div>
   <p class="sub">${fmt(s.files)} files${s.truncated?' (inventory capped for display)':''}
      ${m.inventory?`· <span style="font-family:var(--mono);font-size:12px">${esc(m.inventory)}</span>`:''}</p>
+  ${outcomeCallout(m.outcome)}
 
   <div class="card"><div class="hero">${money(total)}</div>
     <div class="hero-lab">estimated API spend · display prices ($${c && DEF().price_per_1k_pages}/1k pages, $${DEF().price_per_1k_in}/1k tokens)</div>
