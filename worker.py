@@ -18,8 +18,18 @@ from dotenv import load_dotenv
 from scaling_lib.worker import Worker
 from scaling_lib.log import setup_logging
 
+
+def _resolve_log_level(name: str) -> int:
+    """Map a LOG_LEVEL env value ('DEBUG'/'INFO'/'WARNING'/...) to a logging level constant,
+    defaulting to INFO for anything unset or unrecognised (never raises on a typo)."""
+    return getattr(logging, (name or "").strip().upper(), logging.INFO)
+
+
 load_dotenv()
-setup_logging(ai_level=logging.INFO)
+# LOG_LEVEL (default INFO) controls stdout + the local rotating file; ai_level (App Insights
+# export) stays fixed at INFO regardless -- DEBUG-level per-file detail is useful for a live
+# troubleshooting session on the box, not worth the ingestion cost of exporting it fleet-wide.
+setup_logging(level=_resolve_log_level(os.environ.get("LOG_LEVEL", "")), ai_level=logging.INFO)
 
 from pii_triage.config import Config, load_rulepack
 from pii_triage.detection import CompiledRules
@@ -181,6 +191,7 @@ def _protocol_text_for(file_path: str) -> str:
     key = str(job_dir)
     with _protocol_cache_lock:
         if key in _protocol_cache:
+            logging.debug("protocol cache hit for %s", job_dir)
             return _protocol_cache[key]
 
     text = ""
@@ -195,6 +206,8 @@ def _protocol_text_for(file_path: str) -> str:
         else:
             try:
                 text = pe(str(protocol_file), _cfg, _runner._RULES)[0]
+                logging.debug("loaded protocol %s (%d chars) for job dir %s",
+                             protocol_file.name, len(text), job_dir)
             except Exception:
                 logging.warning("could not read protocol file %s; proceeding without it",
                                 protocol_file, exc_info=True)
@@ -239,6 +252,8 @@ def _bde_threshold_for(file_path: str) -> int | None:
         except Exception:
             logging.warning("could not read %s; using the worker default BDE threshold",
                             cfg_file, exc_info=True)
+    logging.debug("bde_threshold for job dir %s: %s", job_dir,
+                  val if val is not None else "(worker default)")
     with _bde_cache_lock:
         _bde_cache[key] = val
     return val
@@ -309,10 +324,14 @@ def _convert_and_forward(file_path: str, output_dir: Path, task) -> None:
     # the general per-file timeout) -- lets a slow-but-legitimate extract/OCR/LLM
     # budget stay generous while conversion itself fails fast on a "lost" file.
     convert_timeout_s = int(os.environ.get("CONVERT_TIMEOUT_S") or _cfg.timeout_s)
+    logging.debug("converting %s (job=%s, timeout=%ss)", orig.name, task.job_id, convert_timeout_s)
+    t0 = time.monotonic()
 
     try:
         with task.checkpoint("convert"):
             converted = convert_legacy_office(file_path, dest_dir, convert_timeout_s)
+        logging.debug("converted %s -> %s in %.1fs", orig.name,
+                      converted.name if converted else "(none)", time.monotonic() - t0)
     except ConversionTimeout as exc:
         rec = _conversion_lost_record(file_path, f"legacy_conversion_timeout: {exc}")
         (output_dir / "result.json").write_text(json.dumps(rec))
@@ -338,6 +357,8 @@ def process(file_path: str, output_dir: Path) -> None:
     try:
         orig = Path(file_path)
         task = current_task()
+        logging.debug("process() start: %s (job=%s, attempt=%s)", orig.name,
+                      getattr(task, "job_id", None), getattr(task, "attempt_count", None))
 
         if os.name == "nt" and orig.suffix.lower() in _LEGACY_EXTS:
             _convert_and_forward(file_path, output_dir, task)
@@ -350,6 +371,8 @@ def process(file_path: str, output_dir: Path) -> None:
         sidecar = Path(file_path + ".orig.json")
         if sidecar.exists():
             orig_meta = json.loads(sidecar.read_text(encoding="utf-8"))
+            logging.debug("%s is a forwarded/converted file (original: %s)",
+                          orig.name, orig_meta.get("orig_file_name"))
 
         # Look up the protocol under the file's own job dir -- use the pre-conversion
         # path for forwarded files, since the converted intermediate lives under
@@ -360,8 +383,11 @@ def process(file_path: str, output_dir: Path) -> None:
         protocol_text = _protocol_text_for(protocol_lookup_path)
         job_bde_threshold = _bde_threshold_for(protocol_lookup_path)
 
+        t0 = time.monotonic()
         rec = process_file(file_path, checkpoint=task.checkpoint if task else None,
                             protocol_text=protocol_text, bde_threshold=job_bde_threshold)
+        logging.debug("process_file(%s) -> status=%s lane=%s in %.1fs", orig.name,
+                      rec.get("status"), rec.get("suggested_lane"), time.monotonic() - t0)
 
         if orig_meta:
             rec["rel_path"] = orig_meta["orig_rel_path"]

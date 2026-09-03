@@ -7,7 +7,9 @@ scaling-lib isn't pip-installed (mirrors hwe_scaled_store.py's own dev-mode path
 
 Run:  python -m unittest test_collect_outputs -v
 """
+import contextlib
 import csv
+import io
 import json
 import os
 import shutil
@@ -278,6 +280,32 @@ class DumpTimingCollapsesLegacyPairs(unittest.TestCase):
         self.assertEqual(snap["files_completed"], 2)   # not 3 -- the legacy pair collapses to 1
         self.assertEqual(len(snap["tasks"]), 2)
         self.assertEqual({t["file_name"] for t in snap["tasks"]}, {"report.docx", "memo.pdf"})
+
+
+class DebugGating(unittest.TestCase):
+    """Gap 8: LOG_LEVEL=DEBUG gates the extra per-pass debug lines onto stderr."""
+
+    def test_writes_to_stderr_when_enabled(self):
+        orig = co._DEBUG
+        co._DEBUG = True
+        try:
+            buf = io.StringIO()
+            with contextlib.redirect_stderr(buf):
+                co._debug("hello")
+            self.assertIn("hello", buf.getvalue())
+        finally:
+            co._DEBUG = orig
+
+    def test_silent_when_disabled(self):
+        orig = co._DEBUG
+        co._DEBUG = False
+        try:
+            buf = io.StringIO()
+            with contextlib.redirect_stderr(buf):
+                co._debug("hello")
+            self.assertEqual(buf.getvalue(), "")
+        finally:
+            co._DEBUG = orig
 
 
 if __name__ == "__main__":

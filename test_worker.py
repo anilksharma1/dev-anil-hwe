@@ -10,6 +10,7 @@ Run:  python -m unittest test_worker -v
 """
 import contextlib
 import json
+import logging
 import os
 import shutil
 import sys
@@ -226,6 +227,23 @@ class PreflightChecks(unittest.TestCase):
             sl_config._credential = orig_cred
         events = list((Path(self.out_mount) / "_events").glob("preflight_warn_*.json"))
         self.assertEqual(len(events), 1)
+
+
+class ResolveLogLevel(unittest.TestCase):
+    """Gap 8: LOG_LEVEL=DEBUG must actually raise the log level; an unset/typo'd value must
+    default safely to INFO rather than raising."""
+
+    def test_debug_maps_to_debug_level(self):
+        self.assertEqual(worker._resolve_log_level("DEBUG"), logging.DEBUG)
+
+    def test_lowercase_is_accepted(self):
+        self.assertEqual(worker._resolve_log_level("debug"), logging.DEBUG)
+
+    def test_empty_defaults_to_info(self):
+        self.assertEqual(worker._resolve_log_level(""), logging.INFO)
+
+    def test_unrecognised_value_defaults_to_info_not_raises(self):
+        self.assertEqual(worker._resolve_log_level("not-a-level"), logging.INFO)
 
 
 if __name__ == "__main__":

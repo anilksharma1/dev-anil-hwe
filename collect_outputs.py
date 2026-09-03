@@ -20,6 +20,16 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "pii_triage_merged"))
 
+# Plain stderr progress prints here too (no `logging` module) -- LOG_LEVEL=DEBUG gates a few
+# extra per-pass/per-file lines onto the same stream, e.g. to see why a --watch pass found
+# nothing new or why a specific output is still "not yet readable" pass after pass.
+_DEBUG = os.environ.get("LOG_LEVEL", "").strip().upper() == "DEBUG"
+
+
+def _debug(msg: str) -> None:
+    if _DEBUG:
+        sys.stderr.write(f"[debug] {msg}\n")
+
 
 def _read_completed_entity(entity: dict) -> tuple:
     """Read one completed entity's result.json.
@@ -423,6 +433,7 @@ def collect_incremental(out_path: str, seen: set, concurrency: int = 32) -> tupl
     from pii_triage.routing import FIELDNAMES
 
     entities = [e for e in _fetch_entities(status_filter="completed") if _row_key(e) not in seen]
+    _debug(f"pass: {len(entities)} newly-completed entity/entities to check (seen={len(seen)})")
     if not entities:
         return 0, seen
 
@@ -520,6 +531,7 @@ def watch(out_path: str = "inventory.csv", interval: float = 15.0, concurrency: 
                 _save_watch_state(state_path, seen)
                 sys.stderr.write(f"  +{n} (total {total_written})\n")
             iterations += 1
+            _debug(f"iteration {iterations} done -- sleeping {interval:.0f}s")
             if max_iterations is not None and iterations >= max_iterations:
                 break
             if _is_drained():

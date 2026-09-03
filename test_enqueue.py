@@ -5,6 +5,8 @@ monkeypatched directly, the same style test_collect_outputs.py already uses.
 
 Run:  python -m unittest test_enqueue -v
 """
+import contextlib
+import io
 import os
 import shutil
 import sys
@@ -183,6 +185,32 @@ class _LockedFakeQueueClient:
     def send_message(self, msg):
         with self.lock:
             self.sink.append((self.name, msg))
+
+
+class DebugGating(unittest.TestCase):
+    """Gap 8: LOG_LEVEL=DEBUG gates the extra per-batch debug lines onto stderr."""
+
+    def test_writes_to_stderr_when_enabled(self):
+        orig = en._DEBUG
+        en._DEBUG = True
+        try:
+            buf = io.StringIO()
+            with contextlib.redirect_stderr(buf):
+                en._debug("hello")
+            self.assertIn("hello", buf.getvalue())
+        finally:
+            en._DEBUG = orig
+
+    def test_silent_when_disabled(self):
+        orig = en._DEBUG
+        en._DEBUG = False
+        try:
+            buf = io.StringIO()
+            with contextlib.redirect_stderr(buf):
+                en._debug("hello")
+            self.assertEqual(buf.getvalue(), "")
+        finally:
+            en._DEBUG = orig
 
 
 if __name__ == "__main__":

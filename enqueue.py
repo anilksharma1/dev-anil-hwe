@@ -24,10 +24,21 @@ import argparse
 import json
 import os
 import sys
+import time
 import uuid
 from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "pii_triage_merged"))
+
+# This script uses plain stderr progress prints rather than the `logging` module (it's a
+# short-lived CLI run, not a long-running service) -- LOG_LEVEL=DEBUG gates a few extra,
+# per-batch/per-file lines onto the same stream for troubleshooting a slow or stuck enqueue.
+_DEBUG = os.environ.get("LOG_LEVEL", "").strip().upper() == "DEBUG"
+
+
+def _debug(msg: str) -> None:
+    if _DEBUG:
+        sys.stderr.write(f"[debug] {msg}\n")
 
 
 def _iter_files(root: str):
@@ -123,9 +134,12 @@ def enqueue(files_dir: str, inventory_csv: str | None = None, exclude_lanes: set
     if inventory_csv:
         from pii_triage.runner import load_filter_set
         keep = load_filter_set(inventory_csv, exclude_lanes or set())
+        _debug(f"loaded --inventory filter from {inventory_csv}: keeping {len(keep)} rel_path(s)")
 
     suffix = "rescan" if keep is not None else "job"
     job_id = job_id or f"{Path(files_dir).parent.name}-{suffix}-{uuid.uuid4().hex[:8]}"
+    _debug(f"job_id={job_id} concurrency={concurrency} batch_size={batch_size} "
+          f"windows_queue={'set' if win_q_name else 'unset'}")
 
     service = _get_queue_service()
     main_client = service.get_queue_client(os.environ["AZURE_QUEUE_NAME"])
@@ -135,7 +149,8 @@ def enqueue(files_dir: str, inventory_csv: str | None = None, exclude_lanes: set
     matched = 0
     failed = []
     with ThreadPoolExecutor(max_workers=concurrency) as pool:
-        for batch in _chunked(_iter_files(files_dir), batch_size):
+        for batch_num, batch in enumerate(_chunked(_iter_files(files_dir), batch_size), 1):
+            batch_t0 = time.monotonic()
             seen += len(batch)
             futures = {
                 pool.submit(_enqueue_one, f, input_mount, keep, job_id, job_type,
@@ -150,6 +165,7 @@ def enqueue(files_dir: str, inventory_csv: str | None = None, exclude_lanes: set
                 except Exception as exc:
                     failed.append((f, exc))
             sys.stderr.write(f"  ...{seen} discovered, {matched} enqueued so far\n")
+            _debug(f"batch {batch_num}: {len(batch)} file(s) in {time.monotonic() - batch_t0:.1f}s")
 
     if failed:
         sys.stderr.write(f"warning: {len(failed)} file(s) failed to enqueue:\n")
