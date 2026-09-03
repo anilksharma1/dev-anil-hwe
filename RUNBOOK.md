@@ -66,7 +66,7 @@ Key production values live here (never commit `.env` — it's git-ignored):
 | `AZURE_CONTAINER_APP` | `ca-worker-eus2-idm-internal-prod` |
 | `AZURE_RESOURCE_GROUP` | `rg-eus2-idm-internal-prod` |
 | `ACR_REGISTRY` / `ACR_IMAGE` | your prod registry / `pii_triage` |
-| `AZURE_QUEUE_NAME` / `AZURE_WINDOWS_QUEUE_NAME` / `AZURE_DEAD_LETTER_QUEUE_NAME` | `doc-processing` / `doc-processing-windows` / `doc-processing-deadletter` |
+| `AZURE_QUEUE_NAME` / `AZURE_DEAD_LETTER_QUEUE_NAME` | `doc-processing` / `doc-processing-deadletter` (`AZURE_WINDOWS_QUEUE_NAME` is no longer used — see §3.5) |
 | `INPUT_MOUNT` / `OUTPUT_MOUNT` | the mounted Azure File Shares |
 
 ### 1.2 Python environment
@@ -75,15 +75,15 @@ Key production values live here (never commit `.env` — it's git-ignored):
 python -m venv ./venv
 cd pii_triage_merged
 pip install -r requirements.txt
-pip install -r requirements-windows.txt
 pip install -r requirements-local.txt
 cd ..
 pip install --force-reinstall "scaling-lib[dev]@git+https://github.com/ldmglobal-com/scaling-lib@dev"
 ./venv/Scripts/Activate.ps1
 ```
 
-`requirements-local.txt` pulls in `scaling-lib[dev]` (which provides the `scaling-lib` CLI and
-`python-dotenv`) and, on Windows, `pywin32` for the legacy-Office COM leg.
+`requirements-local.txt` pulls in `scaling-lib[dev]` (the `scaling-lib` CLI and `python-dotenv`).
+There is no Windows-only pip dependency any more — legacy Office conversion runs via LibreOffice
+headless (a system install, not pip; see §3.5), the same on every worker.
 
 ### 1.3 Azure login
 
@@ -193,9 +193,10 @@ Place each matter under `INPUT_MOUNT` as `<job_dir>/files/` with an optional sib
 python enqueue.py I:\<job_dir>\files
 ```
 
-Streams the walk (no full listing up front) and enqueues everything under one `job_id`.
-`.doc`/`.xls`/`.ppt` are auto-routed to `AZURE_WINDOWS_QUEUE_NAME`. To rescan only the
-responsive/unresolved subset of a prior run (skips `likely_non_responsive`):
+Streams the walk (no full listing up front), chunks/parallelizes the submission, and enqueues
+everything under one `job_id`. `.doc`/`.xls`/`.ppt` go to the same main queue as everything else
+now (§3.5) — `AZURE_WINDOWS_QUEUE_NAME` only still matters if you haven't unset it. To rescan
+only the responsive/unresolved subset of a prior run (skips `likely_non_responsive`):
 
 ```powershell
 python enqueue.py I:\<job_dir>\files --inventory inventory.csv
@@ -228,36 +229,30 @@ For non-searchable files, after reviewers fill `gold_responsive`/`gold_bde` in t
 python -m pii_triage estimate inventory.csv sample.csv --out table2.csv
 ```
 
-### 3.5 The Windows leg
+### 3.5 Legacy `.doc`/`.xls`/`.ppt` — no separate Windows leg any more
 
-Legacy `.doc`/`.xls`/`.ppt` need Win32 COM conversion (Windows-only). With
-`AZURE_WINDOWS_QUEUE_NAME` set, `enqueue.py` routes them to the Windows queue automatically. On
-the Windows VM, run the worker natively (not in Docker) and leave it polling:
+Legacy Office conversion used to need Win32 COM automation (Windows-only), which meant a
+dedicated Windows VM running `python worker.py` natively, a separate `AZURE_WINDOWS_QUEUE_NAME`,
+and a two-hop convert-then-forward-to-Linux dance — a real single point of failure sitting
+outside the Container Apps fleet's own restart/scale handling (see `SCALED_UI_BUILD_NOTES.md`'s
+history for why, if you're curious).
 
-```powershell
-python worker.py
-```
+That's gone. `.doc`/`.xls`/`.ppt` now convert to OOXML **inline**, via LibreOffice headless
+(`conversion.py`), on whichever Linux worker in the normal fleet happens to dequeue the file —
+exactly the same as every other format. There is no Windows VM to run, no
+`AZURE_WINDOWS_QUEUE_NAME` to set (leave it unset), and nothing to supervise separately: Container
+Apps' own restart-on-crash and scale rule already cover this worker like any other.
 
-It detects `sys.platform == "win32"`, polls the Windows queue, converts each file, and forwards
-the result to the Linux queue for the rest of the pipeline. Its `.env` needs the same storage and
-queue vars as the Linux workers, plus `AZURE_WINDOWS_QUEUE_NAME`.
+The worker image installs `libreoffice-writer`/`-calc`/`-impress` + `antiword` via `apt-get` (see
+`Dockerfile`) — nothing to install yourself beyond building/deploying the image normally (§2).
 
-**Don't run it bare.** Unlike the Linux fleet (Container Apps restarts a crashed container on its
-own), a bare `python worker.py` on this VM is a single point of failure — if it crashes (an
-unhandled exception, a hung Office/COM call, an OOM) or the VM reboots, every legacy file queues
-up behind it silently until someone notices. Run it through the supervisor instead, once:
-
-```powershell
-.\run_worker_forever.ps1
-```
-
-This restarts worker.py on any exit (backoff grows on rapid repeated crashes, resets once a run
-has stayed up a while) and logs every restart to `worker_supervisor.log`. To also survive a VM
-reboot (not just a process crash), register it as a Scheduled Task **once**, as Administrator:
-
-```powershell
-.\register_worker_task.ps1
-```
+**If you still have a Windows VM worker running from before this change**, drain it (let it
+finish converting anything in flight, or let `AZURE_WINDOWS_QUEUE_NAME`'s queue empty) and stop
+it — it has nothing left to poll once `AZURE_WINDOWS_QUEUE_NAME` is unset in `.env`.
+`run_worker_forever.ps1` / `register_worker_task.ps1` (a supervisor + Scheduled Task registration
+for that VM) are kept in the repo only as a rollback path if LibreOffice's conversion fidelity
+ever turns out inadequate for some real corpus and the old COM-based `conversion.py` needs
+reviving from git history — not part of the normal deploy any more.
 
 ---
 
@@ -385,4 +380,4 @@ score rows below are what the app runs for you — use them directly only for au
 | Rescan responsive subset | `python enqueue.py I:\<job_dir>\files --inventory inventory.csv` |
 | Collect results | `python collect_outputs.py --out inventory.csv` |
 | Container App logs | `az containerapp logs show -g rg-eus2-idm-internal-prod -n ca-worker-eus2-idm-internal-prod --follow` |
-| Windows leg | `python worker.py` (on the Windows VM) |
+| Collect live (before full drain) | `python collect_outputs.py --out inventory.csv --watch` |

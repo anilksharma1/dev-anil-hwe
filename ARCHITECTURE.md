@@ -63,9 +63,10 @@ only describes what survived.
 
 ```mermaid
 flowchart TD
-    A["File dequeued by a worker"] --> B{"legacy .doc/.xls/.ppt<br/>on Windows?"}
-    B -- yes --> W["Win32 COM convert<br/>→ forward to Linux queue"]
-    B -- no --> C["SHARED PASS (runs once)"]
+    A["File dequeued by a worker"] --> B{"legacy .doc/.xls/.ppt?"}
+    B -- yes --> W["LibreOffice headless convert<br/>(inline, same worker)"]
+    W --> C["SHARED PASS (runs once)"]
+    B -- no --> C
 
     subgraph SP["SHARED PASS — where the cost is"]
         C --> E["extract text + metadata"]
@@ -445,25 +446,28 @@ sequenceDiagram
     participant Op as Operator
     participant Enq as enqueue.py
     participant Q as Storage Queue
-    participant WQ as Windows queue
-    participant W as Linux worker
-    participant WVM as Windows VM worker
+    participant W as Worker (Linux, any replica)
+    participant LO as LibreOffice headless
     participant DI as OCR / LLM
     participant Out as OUTPUT_MOUNT
     participant Tbl as Status Table
+    participant Wtc as collect_outputs.py --watch
     participant Col as collect_outputs.py
 
     Op->>Enq: enqueue.py job/files [--inventory]
-    Enq->>Q: one message per file (shared job_id)
-    Enq->>WQ: .doc/.xls/.ppt routed here
+    Enq->>Q: one message per file (shared job_id), chunked + parallel submit
+    Note over Enq,Q: every format, including .doc/.xls/.ppt -- one queue, one fleet
+    Op->>Wtc: auto-started at submit (UI) or run manually
     loop until drained
         W->>Q: poll
+        W->>LO: convert inline if legacy Office (--convert-to, timeout-bounded)
         W->>DI: --ocr / --llm (optional)
         W->>Out: result.json
         W->>Tbl: task status + tokens + checkpoints
+        Wtc->>Tbl: poll for newly-completed
+        Wtc->>Out: append new result.json rows -> inventory.csv (live)
     end
-    WVM->>WQ: poll → Win32 convert → forward to Q
-    Op->>Col: collect_outputs.py --out inventory.csv
+    Op->>Col: collect_outputs.py --out inventory.csv (one-shot fallback)
     Col->>Tbl: list completed tasks
     Col->>Out: read each result.json
     Col-->>Op: inventory.csv (+ _timing.json)
@@ -471,27 +475,49 @@ sequenceDiagram
 
 ### 7.2 HLD
 
-- **`worker.py`** initializes the `runner` globals **once per process** (before threads start, to
-  avoid clobbering the main SIGINT handler), then hands `process` to `Worker().run(process)`.
-  `USE_*` env flags are the real gate; CLI `--no-ocr/--no-llm/--no-ner` can only *disable*.
-- **`process(file_path, output_dir)`** — the per-message callback: legacy-Office Windows leg, then
-  `process_file(...)`, then `json.dumps(rec)` → `result.json`. A `finally` always bumps the
-  completion counter.
-- **Windows leg** — `.doc/.xls/.ppt` are converted with Win32 COM on a Windows VM worker and
-  **forwarded to the Linux queue under the same `job_id`** (with an `.orig.json` sidecar so the
-  original identity is restored on the final row).
+- **`worker.py`** runs a **startup preflight** (`_run_preflight_or_exit`) before ever polling the
+  queue — scaling_lib import, `INPUT_MOUNT`/`OUTPUT_MOUNT`, storage queue/table reachability (all
+  REQUIRED, `sys.exit(1)` on failure); an Azure AI credential/token check when `USE_LLM`/`USE_OCR`
+  is on (OPTIONAL — logged CRITICAL and recorded as a durable event, never blocks rules-only
+  processing). Then initializes the `runner` globals **once per process** (before threads start,
+  to avoid clobbering the main SIGINT handler), and hands `process` to
+  `Worker(concurrency=...).run(process)` — concurrency defaults to the container's actual cgroup
+  CPU quota × 2, clamped `[2, 16]` (`_default_concurrency`/`_detect_cpu_quota`), overridable via
+  `WORKER_CONCURRENCY`. `USE_*` env flags are the real gate; CLI `--no-ocr/--no-llm/--no-ner` can
+  only *disable*.
+- **`process(file_path, output_dir)`** — the per-message callback: `process_file(...)` (which
+  converts legacy Office inline — see below), then `json.dumps(rec)` → `result.json`. A `finally`
+  always bumps the completion counter. The `.orig.json` sidecar check is a one-time
+  backward-compatibility bridge for any file still in flight from before the Windows-leg removal
+  (below) — new work never creates one.
+- **No Windows leg any more.** `.doc`/`.xls`/`.ppt` used to need Win32 COM conversion (Windows-only),
+  which meant a dedicated Windows VM, a separate `AZURE_WINDOWS_QUEUE_NAME`, and a two-hop
+  convert-then-forward-to-Linux dance living outside Container Apps' own restart/scale handling —
+  a real single point of failure. Legacy conversion now runs **inline**, cross-platform, via
+  LibreOffice headless (`conversion.py`) inside `_process_file` (shared with the local CLI path) —
+  the same worker that dequeued the file also converts it, exactly like every other format.
+  `AZURE_WINDOWS_QUEUE_NAME` should be left unset.
 - **DLQ circuit-breaker** — a daemon thread self-terminates a worker (`os._exit(1)`, so the task
   requeues) when the dead-letter growth rate exceeds `DLQ_FAILURE_RATE` after
-  `DLQ_MIN_COMPLETIONS`. Intentional back-pressure, not a crash.
+  `DLQ_MIN_COMPLETIONS`. Intentional back-pressure, not a crash — and now writes a durable
+  `OUTPUT_MOUNT/_events/dlq_trip_*.json` marker (`_write_dlq_trip_event`) so the Monitor screen can
+  show *why*, since worker logs themselves are deliberately not tailed in the UI.
 - **Per-job protocol & threshold** are looked up from each file's `<job_dir>` and cached per job
   dir (not once at startup) — one fleet can process several concurrent matters.
-- **`enqueue.py`** streams the walk and builds messages directly so the whole submission shares one
-  `job_id` (one batch in `scaling-lib status`), with optional inventory-filtered rescans.
+- **`enqueue.py`** streams the walk, chunks it into batches (`--batch-size`, default 500), and
+  submits each batch concurrently through a thread pool (`--concurrency`, default 32) — two
+  network round-trips per file (`init_task` + `send_message`) no longer run serially. Builds
+  messages directly so the whole submission shares one `job_id` (one batch in `scaling-lib
+  status`), with optional inventory-filtered rescans. One file's Table/Queue error is isolated to
+  that file, not the whole run.
 - **`collect_outputs.py`** reads each `result.json` (paths from the status table) into
-  `inventory.csv`, tolerant of the Windows-leg `forwarded.json` stubs, and dumps a `_timing.json`
-  cost/metrics snapshot.
+  `inventory.csv`, and dumps a `_timing.json` cost/metrics snapshot (collapsed through
+  `pii_triage.legacy_pairs` so a historical run's two-pass rows don't double-count). `--watch`
+  polls continuously and appends newly-completed rows as they land — auto-started by the UI at
+  submit (`hwe_scaled_ui.start_watch`), PID-locked against a second writer on the same file.
 - **`Dockerfile`** — multi-stage: a builder venv installs `requirements.txt` + `scaling-lib@dev`
-  (via `GITHUB_TOKEN`); the final image ships only `worker.py`, `collect_outputs.py`, and the
+  (via `GITHUB_TOKEN`); the final image installs `libreoffice-writer`/`-calc`/`-impress` +
+  `antiword` (apt) for legacy conversion, then ships `worker.py`, `collect_outputs.py`, and the
   `pii_triage` package (`CMD ["python","worker.py"]`).
 
 ### 7.3 LLD
@@ -499,34 +525,63 @@ sequenceDiagram
 - **`_build_config(ocr, llm, ner)`** reads env: `RULEPACK_PATH`, `INPUT_MOUNT`→`root`,
   `BDE_THRESHOLD`, `USE_*`, deployment fallback, `FILE_TIMEOUT_S`, `MAX_BYTES`, `MAX_SCAN_*`,
   `DEFAULT_JURISDICTION`, `LLM_INPUT_CHARS`, `LOG_LLM_PROMPTS`.
-- **`process`** steps: `current_task()` → Windows convert-and-forward → `.orig.json` rehydrate →
-  `protocol_lookup_path` (pre-conversion path for forwarded files) → `_protocol_text_for` +
-  `_bde_threshold_for` → `process_file(..., checkpoint=task.checkpoint, protocol_text=…,
-  bde_threshold=…)` → rewrite `rel_path/file_name/ext` for forwarded files → log by status
+- **`process`** steps: `current_task()` → `.orig.json` rehydrate (legacy compat only) →
+  `protocol_lookup_path` → `_protocol_text_for` + `_bde_threshold_for` →
+  `process_file(..., checkpoint=task.checkpoint, protocol_text=…, bde_threshold=…)` → rewrite
+  `rel_path/file_name/ext` if a legacy-compat sidecar was present → log by status
   (`error/timeout`→error; `no_parser/skipped_too_large`→warning) → write `result.json`.
-- **`_convert_and_forward`** writes the converted file under `INPUT_MOUNT/_converted/<job_id>/`
-  (so a relative path resolves on any Linux worker), runs COM inside `task.checkpoint("convert")`,
-  writes `<converted>.orig.json`, forwards via `_forward_to_linux_queue` (reuses `init_task` +
-  `_build_message` with the same `job_id`), and writes `forwarded.json` for the collector to skip.
+- **`pii_triage.runner._process_file`** — legacy conversion step: `ext in (.doc,.xls,.ppt)` →
+  `conversion.convert_legacy_office(path, tmp_dir, CONVERT_TIMEOUT_S or cfg.timeout_s)` inside
+  `checkpoint("convert")`. `ConversionTimeout` (a genuine hang, force-killed by
+  `subprocess.run(timeout=...)`) → bounded `status="timeout"` result, no retry (it would hang
+  again identically). An ordinary failure/no-binary-found logs a warning and continues extraction
+  against the **original** file. Success repoints `path`/`ext` at the converted file; `rec`'s own
+  identity fields (`rel_path`/`file_name`/`ext`) still reflect the original.
+- **`conversion.convert_legacy_office`** — `soffice --headless --convert-to <fmt> --outdir <dir>
+  <src>`, each call in its own throwaway `-env:UserInstallation` profile dir (concurrent
+  `WORKER_CONCURRENCY` invocations would otherwise collide on LibreOffice's shared profile lock).
+  `SOFFICE_PATH` overrides the binary; `shutil.which("soffice")`/`"libreoffice"` otherwise.
+- **`_detect_cpu_quota`/`_default_concurrency`** — reads the cgroup CPU quota directly (v2
+  `cpu.max`, falling back to v1 `cpu.cfs_quota_us`/`cpu.cfs_period_us`) rather than
+  `os.cpu_count()` (which reports the node, not a fractional Container Apps `cpu=0.5`-style
+  allocation); default concurrency = quota × 2, clamped `[2, 16]`, falls back to 4 if undetectable.
 - **`_dlq_monitor(baseline)`** — loop every `DLQ_CHECK_INTERVAL_S`; `done = _worker_completions *
   DLQ_WORKER_COUNT`; if `done ≥ DLQ_MIN_COMPLETIONS` and `dlq_growth/done > DLQ_FAILURE_RATE` →
-  `os._exit(1)`.
+  write the trip event → `os._exit(1)`.
 - **`_protocol_text_for`** — `_job_dir_for` walks parents for a `files/` ancestor; `_find_protocol_file`
   tries `protocol.{pdf,docx,doc,txt,rtf}` then a case-insensitive `iterdir`; extracts via
   `get_extractor`; cached per job dir (`_protocol_cache`, `setdefault` so a good read isn't clobbered).
   `_bde_threshold_for` reads `<job_dir>/pii_job.json` (written by `enqueue.py --bde-threshold`).
-- **`enqueue.enqueue(files_dir, inventory_csv, exclude_lanes, job_id, bde_threshold)`** —
-  `_ensure_queues/_ensure_table`; optional `pii_job.json`; `keep = load_filter_set(inventory,
-  exclude_lanes)` (default excludes `likely_non_responsive`); `job_id or f"{jobdir}-{'rescan'|'job'}-
-  {uuid4().hex[:8]}"`; per file `init_task` + `_build_message` to the main or Windows queue
-  (`_is_windows_file`). Filtering happens **at enqueue time** because a queued task always runs.
-- **`collect.collect(out_path, concurrency=32)`** — `_fetch_entities(status_filter="completed")`,
-  `ThreadPoolExecutor` reads each `result.json` (`raw_decode` tolerant), `csv.DictWriter(FIELDNAMES,
-  extrasaction="ignore")`. `_read_completed_entity` skips `forwarded.json` stubs. `_fetch_worker_config`
-  prices compute via ARM + the public Azure Retail Prices API (`AZURE_CREDENTIAL_TYPE`,
-  `AZURE_SUBSCRIPTION_ID`).
+- **`enqueue.enqueue(files_dir, inventory_csv, exclude_lanes, job_id, bde_threshold, concurrency,
+  batch_size)`** — `_ensure_queues/_ensure_table`; optional `pii_job.json`; `keep =
+  load_filter_set(inventory, exclude_lanes)` (default excludes `likely_non_responsive`); `job_id
+  or f"{jobdir}-{'rescan'|'job'}-{uuid4().hex[:8]}"`; the streamed walk is grouped into
+  `_chunked` batches, each submitted via `ThreadPoolExecutor` to `_enqueue_one` (`init_task` +
+  `_build_message`, still routable to a Windows queue via `_is_windows_file` if
+  `AZURE_WINDOWS_QUEUE_NAME` is set, though nothing sets it any more); per-file exceptions are
+  caught and reported, not fatal. Filtering happens **at enqueue time** because a queued task
+  always runs.
+- **`collect.collect(out_path, concurrency=32)`** — one-shot: `_fetch_entities(status_filter=
+  "completed")`, `ThreadPoolExecutor` reads each `result.json` (`raw_decode` tolerant),
+  `csv.DictWriter(FIELDNAMES, extrasaction="ignore")`. `_read_completed_entity` skips
+  `forwarded.json` stubs (a historical-run compat path). `dump_timing` collapses legacy pairs via
+  `pii_triage.legacy_pairs.collapse_legacy_pairs` before reading any aggregate off `RunMetrics`.
+  `_fetch_worker_config` prices compute via ARM + the public Azure Retail Prices API
+  (`AZURE_CREDENTIAL_TYPE`, `AZURE_SUBSCRIPTION_ID`).
+- **`collect.watch(out_path, interval, concurrency, restart, max_iterations)`** — loops
+  `collect_incremental` (append newly-completed rows, flush+fsync immediately) until the whole
+  table drains or Ctrl+C; a `<out>.watch_state.json` sidecar tracks already-written row keys for
+  crash-safe resume, and a `<out>.watch.pid` lock (checked via a cross-platform `_pid_alive`)
+  refuses a second concurrent watcher against the same file.
+- **`pii_triage.legacy_pairs.collapse_legacy_pairs(items, name_of=...)`** — pure, DRY helper
+  shared by `hwe_scaled_store.job_metrics` (live Monitor) and `collect_outputs.dump_timing`: drops
+  a legacy pre-conversion Table row when its post-conversion counterpart is also present (a
+  historical two-Table-row artifact from before this change), so per-state file counts aren't
+  inflated by one extra row per legacy file.
 - **`hwe_scaled_store.py`** is the read-only status layer (see Initiative 5): every table/queue read
   goes through `scaling_lib`'s own helpers so UI numbers can't drift from `scaling-lib status`.
+  Also reads `OUTPUT_MOUNT/_events/` for DLQ-trip and preflight-failure markers
+  (`dlq_events`/`preflight_events`).
 
 ---
 
@@ -700,7 +755,7 @@ Only the first three count as responsive; `likely_non_responsive` is cleared; th
 
 | Service | Used by | Purpose |
 |---|---|---|
-| Azure Storage Queue(s) | worker, enqueue, store | work distribution (Linux + Windows queues, DLQ) |
+| Azure Storage Queue(s) | worker, enqueue, store | work distribution (one main queue for every format, DLQ) |
 | Azure Table | worker, collect, store, worker_status | per-task status, tokens, checkpoints |
 | Azure Files (`INPUT_MOUNT`/`OUTPUT_MOUNT`) | worker, collect | corpus in, `result.json` out |
 | Azure OpenAI | `azure_clients` (`--llm`) | responsiveness, BDE count, graded overview |

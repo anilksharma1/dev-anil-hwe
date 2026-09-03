@@ -19,9 +19,10 @@ New-HWE/
 │   │   ├── report.py         # Table 1 builder (searchable files)
 │   │   ├── sampling.py       # Table 2: sample drawing & extrapolation
 │   │   ├── benchmark.py      # Accuracy scoring vs. gold-standard results
-│   │   └── conversion.py     # Legacy Office → OOXML via Win32 COM (Windows only)
+│   │   ├── conversion.py     # Legacy Office → OOXML via LibreOffice headless (cross-platform)
+│   │   └── legacy_pairs.py   # Shared helper: collapse a legacy file's two-Table-row artifact (historical runs)
 │   ├── rulepacks/default.yaml  # Built-in Master List (entity definitions, not values)
-│   └── tests/                  # 111 unit tests
+│   └── tests/                  # unit tests
 ├── worker.py                 # scaling-lib worker entry point (distributed)
 ├── collect_outputs.py        # Gathers result.json files into inventory.csv
 ├── enqueue.py                # Worker-fleet equivalent of `scaling-lib enqueue`, with streaming walk + optional inventory filtering
@@ -141,16 +142,23 @@ sampling.py estimate — per-bucket % extrapolated to full population → Table 
 
 ## scaling-lib integration
 
-**`worker.py`** — Initialises compiled rules, OCR fn, and LLM fn once per worker, then calls `Worker().run(process)`. The `process(file_path, output_dir)` function:
-1. Converts legacy Office files (Win32 COM) if on Windows
-2. Calls `process_file()` (extract → detect → enrich → route)
-3. Writes `result.json` to `output_dir`
+**`worker.py`** — Runs a startup preflight (scaling_lib import, mounts, storage reachability;
+LLM/OCR credential check if enabled) before ever polling the queue, then initialises compiled
+rules, OCR fn, and LLM fn once per worker, and calls `Worker(concurrency=...).run(process)`
+(concurrency sized off the container's actual cgroup CPU quota unless `WORKER_CONCURRENCY`
+overrides it). The `process(file_path, output_dir)` function:
+1. Calls `process_file()` (extract → detect → enrich → route) — legacy `.doc`/`.xls`/`.ppt`
+   convert to OOXML inline here, via LibreOffice headless (`conversion.py`), the same on every
+   worker; there is no Windows-only step any more.
+2. Writes `result.json` to `output_dir`
 
 **`collect_outputs.py`** — After the queue is fully drained, walks all `output_dir` paths (retrieved via scaling-lib status table), reads each `result.json`, and writes a single `inventory.csv`. This feeds the `report`, `sample`, and `estimate` commands.
 
 **`enqueue.py`** -- Worker-fleet equivalent of `scaling-lib enqueue`, given a job's `files/` folder. Streams the directory walk (`os.walk` generator) rather than materializing it first, so enqueueing starts on the first file instead of stalling on a full listing of a few-hundred-thousand-file corpus. Filtering is optional: with `--inventory <inventory.csv>`, it's also the worker equivalent of `scan --filter-inventory` -- enqueues only the files whose `suggested_lane` isn't in `--exclude-lanes` (default `likely_non_responsive`), e.g. to rescan the responsive/unresolved subset with `USE_LLM`/`USE_OCR` on without resubmitting the whole corpus. Filtering happens here, at enqueue time, since a queued task always runs once a worker picks it up -- `process()` has no "skip this" signal. Builds queue messages directly (bypassing scaling-lib's `enqueue()`, which would mint a fresh random `job_id` per file) so the whole run shares one `job_id` and shows as a single batch in `scaling-lib status`.
 
-Windows queue routing: `.doc`/`.xls`/`.ppt` files are enqueued to `AZURE_WINDOWS_QUEUE_NAME` automatically by scaling-lib at enqueue time; a Windows worker polls it and performs Win32 COM conversion before calling `process()`.
+`enqueue.py` also chunks the streamed walk into batches and submits each batch through a thread pool (`--concurrency`, default 32; `--batch-size`, default 500), instead of one `init_task`+`send_message` round-trip per file serially.
+
+No more Windows queue routing: `.doc`/`.xls`/`.ppt` files go to the same main queue as everything else — `AZURE_WINDOWS_QUEUE_NAME` should be left unset. (It used to route them to a separate Windows-only worker for Win32 COM conversion; that leg is gone — see `conversion.py` and `ARCHITECTURE.md` §7.)
 
 Matter protocol: each job's corpus lives at `<job_dir>/files/` under `INPUT_MOUNT`, with the matter protocol doc as a sibling — `<job_dir>/protocol.pdf` (or `.docx`/`.doc`/`.txt`/`.rtf`). `scaling-lib enqueue` must be pointed at the `files/` subfolder itself (it only lists immediate files in the given path, not recursive), so the protocol file is never enqueued as a work item. `worker.py::process()` walks up from each file's path to find its `files/` ancestor, resolves the sibling protocol doc, extracts its text, and passes it into `process_file(..., protocol_text=...)` — looked up per file (and cached per job dir within a worker process) rather than read once at startup, since one worker fleet can process several concurrently-running jobs.
 
@@ -172,10 +180,14 @@ python -m pii_triage benchmark inventory.csv gold.xlsx
 
 | Variable | Purpose |
 |---|---|
-| `AZURE_QUEUE_NAME` | Linux worker queue |
-| `AZURE_WINDOWS_QUEUE_NAME` | Windows worker queue (legacy Office) |
+| `AZURE_QUEUE_NAME` | The one worker queue — all formats, all workers |
+| `AZURE_WINDOWS_QUEUE_NAME` | Legacy, leave unset — no separate Windows worker queue any more |
 | `AZURE_STORAGE_QUEUE_URL` / `AZURE_STORAGE_TABLE_URL` | Azure Storage endpoints |
 | `USE_OCR` / `USE_LLM` / `USE_NER` | Feature flags (default `false`) |
+| `WORKER_CONCURRENCY` | Files processed at once per container (default: sized off the container's cgroup CPU quota) |
+| `CONVERT_TIMEOUT_S` | Per-file legacy-conversion timeout (falls back to `FILE_TIMEOUT_S`) |
+| `SOFFICE_PATH` | Override the LibreOffice binary path/name if not `soffice`/`libreoffice` on `PATH` |
+| `LOG_LEVEL` | `worker.py`/`enqueue.py`/`collect_outputs.py` verbosity (default `INFO`; set `DEBUG` for detail) |
 | `BDE_THRESHOLD` | Entity count for BDE routing (default `51`) |
 | `FILE_TIMEOUT_S` | Per-file processing timeout (default `120`) |
 | `MAX_BYTES` | File size cap (default `1 GB`) |
@@ -197,13 +209,13 @@ python -m pii_triage benchmark inventory.csv gold.xlsx
 cd pii_triage && python -m unittest discover -s tests -v
 ```
 
-111 tests covering: Luhn validation, entity detection, value vs. topic-mention signals, bucketing, lane routing, sampling/extrapolation.
+Covers: Luhn validation, entity detection, value vs. topic-mention signals, bucketing, lane routing, sampling/extrapolation, legacy conversion (LibreOffice-headless wrapper logic + inline handling in `_process_file`).
 
 ---
 
 ## scaling-lib
 
-**Architecture in brief**: Multiple Linux Docker containers poll `AZURE_QUEUE_NAME` in parallel; each picks up one message, calls `process(file_path, output_dir)`, and writes outputs to `OUTPUT_MOUNT/job_id/file_stem/`. When `AZURE_WINDOWS_QUEUE_NAME` is set, `.doc`/`.xls`/`.ppt` files route there at enqueue time and a Windows worker polls it instead. The library handles polling, retries, rate limiting, dead-lettering, output directory creation, and status tracking. After processing, each task's `output_path` is stored in the status table. You have a few tasks, including implementing `process()`, switching to use scaling-lib's API clients, and collecting outputs together at the end of the pipeline (if this isn't already implemented). **Read all docs thoroughly before writing code. Do not skim past anything**
+**Architecture in brief**: Multiple Linux Docker containers poll `AZURE_QUEUE_NAME` in parallel; each picks up one message, calls `process(file_path, output_dir)`, and writes outputs to `OUTPUT_MOUNT/job_id/file_stem/`. Every format, including legacy `.doc`/`.xls`/`.ppt`, goes through the same queue and the same worker fleet — conversion happens inline (LibreOffice headless), so there is no separate Windows queue/worker leg. The library handles polling, retries, rate limiting, dead-lettering, output directory creation, and status tracking. After processing, each task's `output_path` is stored in the status table. You have a few tasks, including implementing `process()`, switching to use scaling-lib's API clients, and collecting outputs together at the end of the pipeline (if this isn't already implemented). **Read all docs thoroughly before writing code. Do not skim past anything**
 
 This project uses [scaling-lib](https://github.com/ldmglobal-com/scaling-lib) for parallel Docker-based file processing workers backed by Azure Storage Queues.
 

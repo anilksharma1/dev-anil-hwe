@@ -21,9 +21,9 @@ plus the account-ownership and renewal register.
 
 ## 1. Python libraries
 
-Source of truth: `pii_triage_merged/requirements.txt`, `requirements-windows.txt`,
-`requirements-local.txt`. The core package runs on the **standard library alone**; every library
-below widens format coverage or enables an opt-in feature, and missing ones degrade gracefully.
+Source of truth: `pii_triage_merged/requirements.txt`, `requirements-local.txt`. The core package
+runs on the **standard library alone**; every library below widens format coverage or enables an
+opt-in feature, and missing ones degrade gracefully.
 
 ### 1.1 Declared — format parsers & core (`requirements.txt`)
 
@@ -41,11 +41,16 @@ below widens format coverage or enables an opt-in feature, and missing ones degr
 | `pytest` | ≥8.0 | MIT | test runner (dev) | ✅ (in image via requirements) |
 | `reportlab` | ≥4.0 | BSD-3-Clause | test-only; builds PDFs for OCR-routing tests | ✅ (in image via requirements) |
 
-### 1.2 Windows leg (`requirements-windows.txt`)
+### 1.2 System packages — legacy Office conversion (Dockerfile, not pip)
 
-| Package | Constraint | License | Purpose | Where |
-|---|---|---|---|---|
-| `pywin32` | ≥306 | PSF-2.0 | Win32 COM automation for `.doc/.xls/.ppt` conversion | Windows VM worker only |
+Legacy `.doc`/`.xls`/`.ppt` conversion runs inline on every worker via LibreOffice headless (no
+more Windows-only COM automation, no separate Windows VM/queue leg — see `conversion.py` and
+`ARCHITECTURE.md` §7).
+
+| Package (apt) | License | Purpose | Where |
+|---|---|---|---|
+| `libreoffice-writer` / `-calc` / `-impress` | MPL-2.0 | `.doc`/`.xls`/`.ppt` → OOXML conversion | worker image |
+| `antiword` | GPL-2.0 | lightweight `.doc` text-extraction fallback (`extractors.x_doc`) | worker image |
 
 ### 1.3 Private / internal (`requirements-local.txt`)
 

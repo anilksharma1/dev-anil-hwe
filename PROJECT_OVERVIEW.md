@@ -91,7 +91,7 @@ routing.py — final lane
 | `report.py` | Builds **Table 1** (searchable files). |
 | `sampling.py` | Builds **Table 2**: `draw_sample` → reviewers code → `estimate` extrapolates. |
 | `benchmark.py` | Scores an inventory against a gold-standard sheet (precision / recall / F1; misses first). |
-| `conversion.py` | Legacy Office → OOXML via Win32 COM (Windows only). |
+| `conversion.py` | Legacy Office → OOXML via LibreOffice headless (cross-platform; runs inline on any worker). |
 
 ### Detection methods (`detection.py`)
 
@@ -152,8 +152,8 @@ dead-lettering, output-dir creation, and status tracking.
 
 | File | Role |
 |---|---|
-| `worker.py` | scaling-lib worker entry point. Initialises rules / OCR fn / LLM fn once per worker, then `Worker().run(process)`. `process(file_path, output_dir)`: (1) convert legacy Office via Win32 COM if on Windows, (2) call `process_file()` (extract → detect → enrich → route), (3) write `result.json`. Walks up to the file's `files/` ancestor to find and cache the sibling **protocol** doc per job dir. |
-| `enqueue.py` | Worker-fleet equivalent of `scaling-lib enqueue`, pointed at a job's `files/` folder. Streams the directory walk (starts on the first file, not after a full listing). Optional `--inventory` filter (rescan only non-excluded lanes). Builds queue messages directly so the whole batch shares one deterministic `job_id`. Routes `.doc/.xls/.ppt` to `AZURE_WINDOWS_QUEUE_NAME`. |
+| `worker.py` | scaling-lib worker entry point. Runs a startup preflight (scaling_lib import, mounts, storage reachability, LLM/OCR credential check) before polling, initialises rules / OCR fn / LLM fn once per worker, then `Worker(concurrency=...).run(process)` (concurrency sized off the container's cgroup CPU quota). `process(file_path, output_dir)`: (1) call `process_file()` (extract → detect → enrich → route — legacy Office converts inline here via LibreOffice, the same on every worker), (2) write `result.json`. Walks up to the file's `files/` ancestor to find and cache the sibling **protocol** doc per job dir. |
+| `enqueue.py` | Worker-fleet equivalent of `scaling-lib enqueue`, pointed at a job's `files/` folder. Streams the directory walk (starts on the first file, not after a full listing), chunked and submitted concurrently through a thread pool. Optional `--inventory` filter (rescan only non-excluded lanes). Builds queue messages directly so the whole batch shares one deterministic `job_id`. Every format, including `.doc/.xls/.ppt`, goes to the one main queue — `AZURE_WINDOWS_QUEUE_NAME` is legacy and should be left unset. |
 | `collect_outputs.py` | After the queue drains, walks all `output_dir` paths (from the status table), reads each `result.json`, and writes one `inventory.csv`. This feeds `report` / `sample` / `estimate` / scoring. |
 | `Dockerfile` | Multi-stage build for the scaled workers. |
 | `worker_status.py` | Worker/queue status helpers. |
@@ -164,10 +164,10 @@ protocol document as a sibling — `<job_dir>/protocol.pdf` (or `.docx/.doc/.txt
 is pointed at `files/` so the protocol is never enqueued as a work item; the worker resolves and
 extracts it per file (cached per job dir), then passes its text into `process_file(..., protocol_text=...)`.
 
-**Windows leg:** `.doc/.xls/.ppt` need Win32 COM conversion, which only exists on Windows. They are
-routed to `AZURE_WINDOWS_QUEUE_NAME` at enqueue time; a Windows VM runs `python worker.py`
-(it detects `sys.platform == "win32"`, polls the Windows queue, converts, and forwards the converted
-file to the Linux queue for the rest of the pipeline).
+**Legacy Office conversion:** `.doc/.xls/.ppt` convert to OOXML inline, via LibreOffice headless
+(`conversion.py`), inside `process_file()` — the same worker that dequeued the file converts it,
+the same as every other format. There is no separate Windows VM/queue leg any more; a genuinely
+lost (hung) conversion is bounded by `CONVERT_TIMEOUT_S` and recorded once, with no retry.
 
 ---
 
@@ -175,8 +175,8 @@ file to the Linux queue for the rest of the pipeline).
 
 | Variable | Purpose |
 |---|---|
-| `AZURE_QUEUE_NAME` | Linux worker queue |
-| `AZURE_WINDOWS_QUEUE_NAME` | Windows worker queue (legacy Office) |
+| `AZURE_QUEUE_NAME` | The one worker queue — all formats |
+| `AZURE_WINDOWS_QUEUE_NAME` | Legacy, leave unset — no separate Windows worker queue any more |
 | `AZURE_STORAGE_QUEUE_URL` / `AZURE_STORAGE_TABLE_URL` | Azure Storage endpoints (managed-identity mode) |
 | `AZURE_STORAGE_CONNECTION_STRING` | Alternative to the URL pair (local/Azurite mode) |
 | `USE_OCR` / `USE_LLM` / `USE_NER` | Feature flags (default `false`) |

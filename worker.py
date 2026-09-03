@@ -263,95 +263,18 @@ _ERROR_STATUSES = {"error", "timeout"}
 _WARN_STATUSES = {"no_parser", "skipped_too_large"}
 
 
-_LEGACY_EXTS = (".doc", ".xls", ".ppt")
-
-
-def _forward_to_linux_queue(job_id: str, converted_path: Path) -> None:
-    """Enqueue the converted file on the Linux queue, under the same job_id."""
-    from scaling_lib.status import init_task
-    from scaling_lib.queue import _build_message, _get_queue_service
-
-    job_type = os.environ["JOB_TYPE"]
-    init_task(job_id, job_type, converted_path.name)
-    stored_path = converted_path.relative_to(Path(_cfg.root))
-    client = _get_queue_service().get_queue_client(os.environ["AZURE_QUEUE_NAME"])
-    client.send_message(_build_message(stored_path, job_id, job_type, posix=True))
-
-
-def _conversion_lost_record(file_path: str, detail: str) -> dict:
-    """A normal, bounded FileRecord for a legacy conversion that hung and had to be
-    force-killed -- written in place of raising, so the task completes ONCE instead
-    of being retried by scaling-lib. A genuine hang (a corrupt file, a blocking modal
-    with no one to click it) will hang again for the same CONVERT_TIMEOUT_S on a
-    retry, so retrying it only doubles the time lost for a result already known.
-    Ordinary (non-timeout) conversion failures still raise below and keep the normal
-    WORKER_MAX_ATTEMPTS retry behavior -- only a confirmed lost cause skips retries.
-    """
-    from pii_triage.routing import FileRecord
-    orig = Path(file_path)
-    try:
-        rel = os.path.relpath(file_path, _cfg.root)
-    except Exception:
-        rel = file_path
-    try:
-        size = os.path.getsize(file_path)
-    except OSError:
-        size = 0
-    rec = FileRecord(rel_path=rel, file_name=orig.name, ext=orig.suffix.lower(), size_bytes=size)
-    rec.status, rec.detail = "timeout", detail
-    return _runner._finalize_early(rec, "timeout")
-
-
-def _convert_and_forward(file_path: str, output_dir: Path, task) -> None:
-    """Windows-only: convert a legacy Office file, then hand detection off to a Linux worker.
-
-    Keeps the Windows worker's per-task holding time down to just the COM call --
-    the actual detection/OCR/LLM pipeline runs on the horizontally-scalable Linux
-    fleet instead of serialized behind one COM instance.
-    """
-    from pii_triage.conversion import convert_legacy_office, ConversionTimeout
-
-    orig = Path(file_path)
-    if task is None:
-        raise RuntimeError("no active task context — cannot forward converted file")
-
-    # Written under INPUT_MOUNT (not OUTPUT_MOUNT) so the relative path in the
-    # forwarded queue message resolves against a Linux worker's own INPUT_MOUNT.
-    dest_dir = Path(_cfg.root) / "_converted" / task.job_id
-    dest_dir.mkdir(parents=True, exist_ok=True)
-
-    # A separate, independently-tunable timeout for just the COM hop (falls back to
-    # the general per-file timeout) -- lets a slow-but-legitimate extract/OCR/LLM
-    # budget stay generous while conversion itself fails fast on a "lost" file.
-    convert_timeout_s = int(os.environ.get("CONVERT_TIMEOUT_S") or _cfg.timeout_s)
-    logging.debug("converting %s (job=%s, timeout=%ss)", orig.name, task.job_id, convert_timeout_s)
-    t0 = time.monotonic()
-
-    try:
-        with task.checkpoint("convert"):
-            converted = convert_legacy_office(file_path, dest_dir, convert_timeout_s)
-        logging.debug("converted %s -> %s in %.1fs", orig.name,
-                      converted.name if converted else "(none)", time.monotonic() - t0)
-    except ConversionTimeout as exc:
-        rec = _conversion_lost_record(file_path, f"legacy_conversion_timeout: {exc}")
-        (output_dir / "result.json").write_text(json.dumps(rec))
-        logging.error("conversion_lost  %s  (gave up after %ss, no retry: %s)",
-                      orig.name, convert_timeout_s, exc)
-        return
-    if not converted:
-        raise RuntimeError(f"conversion failed for {file_path}")
-
-    Path(str(converted) + ".orig.json").write_text(json.dumps({
-        "orig_rel_path": os.path.relpath(file_path, _cfg.root),
-        "orig_file_name": orig.name,
-        "orig_ext": orig.suffix.lower(),
-    }))
-    _forward_to_linux_queue(task.job_id, converted)
-    (output_dir / "forwarded.json").write_text(json.dumps({"forwarded_to_file": converted.name}))
-    logging.info("converted+forwarded  %s -> %s", orig.name, converted.name)
-
-
 def process(file_path: str, output_dir: Path) -> None:
+    """The per-message callback: extract/detect/classify a file and write result.json.
+
+    Legacy .doc/.xls/.ppt conversion happens INLINE inside process_file() (via
+    pii_triage.runner's shared _process_file, using LibreOffice headless -- see
+    conversion.py) -- there is no separate Windows leg/queue any more. Every file, whatever
+    its extension, goes through this exact same path on whichever worker dequeues it.
+
+    The .orig.json sidecar check below is a one-time backward-compatibility bridge: it only
+    matters for a file forwarded by the OLD Windows-leg two-hop conversion (pre-this-change),
+    if any such job is still in flight across a rolling deploy. New work never creates one.
+    """
     global _worker_completions
     from scaling_lib.metrics import current_task
     try:
@@ -360,19 +283,12 @@ def process(file_path: str, output_dir: Path) -> None:
         logging.debug("process() start: %s (job=%s, attempt=%s)", orig.name,
                       getattr(task, "job_id", None), getattr(task, "attempt_count", None))
 
-        if os.name == "nt" and orig.suffix.lower() in _LEGACY_EXTS:
-            _convert_and_forward(file_path, output_dir, task)
-            return
-
-        # Files forwarded from the Windows leg carry a sidecar with the original
-        # (pre-conversion) identity, so the record reports the corpus file, not
-        # the converted intermediate.
         orig_meta = None
         sidecar = Path(file_path + ".orig.json")
         if sidecar.exists():
             orig_meta = json.loads(sidecar.read_text(encoding="utf-8"))
-            logging.debug("%s is a forwarded/converted file (original: %s)",
-                          orig.name, orig_meta.get("orig_file_name"))
+            logging.debug("%s is a forwarded/converted file from a pre-existing Windows-leg "
+                          "job (original: %s)", orig.name, orig_meta.get("orig_file_name"))
 
         # Look up the protocol under the file's own job dir -- use the pre-conversion
         # path for forwarded files, since the converted intermediate lives under

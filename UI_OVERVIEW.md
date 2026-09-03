@@ -327,5 +327,5 @@ For local validation without Azure, run an **Azurite** stack (Queue + Table), po
 devstore connection string, set `SCALING_LIB_SRC` to a scaling-lib checkout, then launch. See
 `SCALED_UI_BUILD_NOTES.md` §2.4 for the exact Azurite command and the 46-test/end-to-end coverage,
 `SCALED_UI_FINDINGS.md` for the Phase-0 schema investigation, and `CLI_ONLY.md` for what the UI
-deliberately leaves to the terminal (`az login`, starting the Windows worker, cancelling a run,
-provisioning infra, editing secrets).
+deliberately leaves to the terminal (`az login`, cancelling a run, provisioning infra, editing
+secrets).

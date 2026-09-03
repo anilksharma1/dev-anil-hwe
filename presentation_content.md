@@ -57,9 +57,9 @@ orange `#eb6834` (stage-2 / LLM), dark `#232a31` for title/section slides. Keep 
 - Headline: **Same engine, two ways to run it.**
 - Two cards:
   - **Local — one machine:** CLI, multiprocessing. `python -m pii_triage scan /corpus …`. The output CSV *is* the progress record — crash-safe resume, idempotent.
-  - **Scaled — Azure fleet:** Container Apps + Storage Queue. ~21 Linux workers poll a queue, one file each, autoscaling with queue depth. A Windows worker handles legacy Office (.doc/.xls/.ppt) via COM.
+  - **Scaled — Azure fleet:** Container Apps + Storage Queue. Linux workers poll one queue, one file each, autoscaling with queue depth and multi-threaded per replica. Legacy Office (.doc/.xls/.ppt) converts inline via LibreOffice — no separate Windows worker.
 - Callout: Built on **scaling-lib** — polling, retries, rate-limited AI clients, dead-lettering, status table, autoscaling. A matter is `<job_dir>/files/` + a sibling `protocol.pdf` the workers pick up automatically.
-- **Speaker notes:** Same code, two ways. Locally it's a multiprocess CLI, and the neat trick is the output CSV *is* the progress record — crash, re-run, it skips finished rows. At scale it's a fleet of Docker workers on Azure Container Apps, each pulling one file off a queue, autoscaling with the backlog. Legacy Office files needing Win32 COM route to a dedicated Windows worker. All the plumbing — retries, rate limiting, dead-lettering, status — comes from scaling-lib. Each matter is a folder of files plus an optional protocol doc the workers read automatically.
+- **Speaker notes:** Same code, two ways. Locally it's a multiprocess CLI, and the neat trick is the output CSV *is* the progress record — crash, re-run, it skips finished rows. At scale it's a fleet of Docker workers on Azure Container Apps, each pulling one file off a queue, autoscaling with the backlog and multi-threading within each replica sized to its own CPU allocation. Legacy Office files convert inline via LibreOffice headless on the same fleet — no dedicated Windows worker any more. All the plumbing — retries, rate limiting, dead-lettering, status — comes from scaling-lib. Each matter is a folder of files plus an optional protocol doc the workers read automatically.
 
 ## Slide 7 — Why you can trust the numbers
 - Headline: **Integrity is designed in, not asserted.**

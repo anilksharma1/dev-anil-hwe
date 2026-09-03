@@ -31,8 +31,13 @@ cd /d C:\Users\AnnaPoutanen\Desktop\HWE-3.0
 ## 1. Install
 
 ```bat
-pip install -r requirements-windows.txt
+pip install -r requirements.txt
 ```
+
+Legacy `.doc`/`.xls`/`.ppt` conversion needs LibreOffice installed separately (the `soffice`
+binary on PATH, or `SOFFICE_PATH` pointing at it) — not a pip package. Without it, those files
+fall back to whatever `extractors.py` can manage natively (`antiword`/`catdoc` for `.doc`,
+`xlrd` for `.xls`) or are flagged `needs_conversion`.
 
 Then **verify Pillow specifically**, because it's the one that fails silently:
 

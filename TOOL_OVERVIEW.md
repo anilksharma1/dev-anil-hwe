@@ -168,7 +168,7 @@ when the matching `--price-per-1k-*` flag is supplied; nothing is priced at a gu
 | A run stalls — steady CPU, no completions | A parser is spinning on a malformed file | The watchdog (default 120 s) kills and replaces the worker and records `timeout`. Don't disable it (`PII_WATCHDOG_S=0`). |
 | Run auto-pauses with `[auto-paused]` | Rolling failure rate exceeded 5 % | Investigate the error class in the CSV/manifest, fix the cause, then rerun to resume. |
 | `ERROR: 'inventory.csv' is open in another program` | Excel holds a Windows file lock | Close Excel and rerun — progress is preserved. |
-| Many files land in `needs_parser` / `convert_lane` | Optional parser missing, or legacy Office needs conversion | Install the optional lib (`requirements.txt`), or run the Windows leg for `.doc/.xls/.ppt`. |
+| Many files land in `needs_parser` / `convert_lane` | Optional parser missing, or legacy Office needs conversion | Install the optional lib (`requirements.txt`); `.doc/.xls/.ppt` convert automatically via LibreOffice headless if `soffice`/`libreoffice` is on PATH (`SOFFICE_PATH` to override). |
 | Stage 2 shows `skip:not_searchable` for many files | Those files yielded no text | Decide whether `--ocr` should be on for that corpus. |
 
 ### 6.2 Scaled fleet (queue / workers / Azure)

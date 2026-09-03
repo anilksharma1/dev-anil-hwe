@@ -118,8 +118,11 @@ Requirements files (all under `pii_triage_merged/`):
 | File | Contents |
 |---|---|
 | `requirements.txt` | the library's optional parsers, `Pillow`, `pytest`/`reportlab` for tests; Azure SDKs listed as commented optionals |
-| `requirements-windows.txt` | `-r requirements.txt` + `pywin32` (Windows COM conversion) |
-| `requirements-local.txt` | `-r requirements-windows.txt` + `scaling-lib[dev]` from git |
+| `requirements-local.txt` | `-r requirements.txt` + `scaling-lib[dev]` from git |
+
+Legacy `.doc`/`.xls`/`.ppt` conversion is a Dockerfile/system-package concern now, not a pip
+requirement — `libreoffice-writer`/`-calc`/`-impress` + `antiword`, installed via `apt-get` in
+the worker image. No more Windows-only `pywin32`/COM, and no separate Windows VM/queue leg.
 
 > **Pillow is not optional if you use OCR.** `pypdf` needs it to decode images embedded in PDFs;
 > without it embedded-image OCR silently becomes a no-op. It's pinned in `requirements.txt`. See

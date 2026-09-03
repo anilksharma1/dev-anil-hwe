@@ -124,24 +124,33 @@ def _process_file(path: str, checkpoint=None, protocol_text: str | None = None,
         size = 0
     rec = FileRecord(rel_path=rel, file_name=os.path.basename(path), ext=ext, size_bytes=size)
 
-    # On Windows, convert legacy Office formats to OOXML before extraction so that
-    # .doc/.xls/.ppt flow through the normal extractor path rather than convert_lane.
-    # The worker does its own conversion (with a task checkpoint) before calling
-    # process_file(), so by the time the worker reaches here the ext is already modern.
+    # Convert legacy Office formats to OOXML before extraction, so .doc/.xls/.ppt flow
+    # through the normal extractor path rather than needs_parser. Runs inline and
+    # cross-platform via LibreOffice headless (not Windows-only COM) -- there is no separate
+    # Windows leg/queue any more; whichever worker dequeues the file converts it itself, the
+    # same as every other format.
     tmp_dir = None
-    if os.name == "nt" and ext in (".doc", ".xls", ".ppt"):
+    if ext in (".doc", ".xls", ".ppt"):
         import tempfile
         from pathlib import Path as _Path
-        from .conversion import convert_legacy_office
-        # Keep the temp dir on the same drive as the corpus to avoid cross-drive
-        # relpath errors on Windows.
+        from .conversion import convert_legacy_office, ConversionTimeout
+        # Keep the temp dir on the same drive as the corpus to avoid cross-drive relpath
+        # errors on Windows (a no-op on Linux/macOS, which have no drive letters).
         _drive = _Path(cfg.root).drive
         tmp_dir = tempfile.mkdtemp(dir=(_drive + "\\") if _drive else None)
+        convert_timeout_s = int(os.environ.get("CONVERT_TIMEOUT_S") or cfg.timeout_s)
         try:
-            converted = convert_legacy_office(path, _Path(tmp_dir), cfg.timeout_s)
+            with checkpoint("convert"):
+                converted = convert_legacy_office(path, _Path(tmp_dir), convert_timeout_s)
             if converted:
                 path = str(converted)
                 ext = os.path.splitext(path)[1].lower()
+        except ConversionTimeout as exc:
+            # A genuinely lost file: it will hang again for the same duration on a retry, so
+            # record it as a bounded timeout and move on -- exactly like an ordinary per-file
+            # extraction timeout just below -- rather than treating it as worth retrying.
+            rec.status, rec.detail = "timeout", f"legacy_conversion_timeout: {exc}"
+            return _finalize_early(rec, "timeout")
         except Exception as exc:
             logger.warning("legacy Office conversion failed for %s, continuing with original: %s",
                            os.path.basename(path), exc, exc_info=True)
