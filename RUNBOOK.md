@@ -242,6 +242,23 @@ It detects `sys.platform == "win32"`, polls the Windows queue, converts each fil
 the result to the Linux queue for the rest of the pipeline. Its `.env` needs the same storage and
 queue vars as the Linux workers, plus `AZURE_WINDOWS_QUEUE_NAME`.
 
+**Don't run it bare.** Unlike the Linux fleet (Container Apps restarts a crashed container on its
+own), a bare `python worker.py` on this VM is a single point of failure — if it crashes (an
+unhandled exception, a hung Office/COM call, an OOM) or the VM reboots, every legacy file queues
+up behind it silently until someone notices. Run it through the supervisor instead, once:
+
+```powershell
+.\run_worker_forever.ps1
+```
+
+This restarts worker.py on any exit (backoff grows on rapid repeated crashes, resets once a run
+has stayed up a while) and logs every restart to `worker_supervisor.log`. To also survive a VM
+reboot (not just a process crash), register it as a Scheduled Task **once**, as Administrator:
+
+```powershell
+.\register_worker_task.ps1
+```
+
 ---
 
 ## 4. Roll back a deployment
