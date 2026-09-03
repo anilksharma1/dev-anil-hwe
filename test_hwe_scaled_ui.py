@@ -845,6 +845,43 @@ class DlqEvents(unittest.TestCase):
         self.assertEqual(events, [])
 
 
+class PreflightEvents(unittest.TestCase):
+    """Gap 4: store.preflight_events() reads worker.py's startup preflight markers, merging
+    both required-failure and optional-warning events, newest first."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.events_dir = os.path.join(self.d, "_events")
+        os.makedirs(self.events_dir)
+        self._orig_output_mount = os.environ.get("OUTPUT_MOUNT")
+        os.environ["OUTPUT_MOUNT"] = self.d
+
+    def tearDown(self):
+        if self._orig_output_mount is None:
+            os.environ.pop("OUTPUT_MOUNT", None)
+        else:
+            os.environ["OUTPUT_MOUNT"] = self._orig_output_mount
+        shutil.rmtree(self.d, ignore_errors=True)
+
+    def _write(self, name, payload):
+        import json as _json
+        with open(os.path.join(self.events_dir, name), "w", encoding="utf-8") as fh:
+            _json.dump(payload, fh)
+
+    def test_merges_required_and_optional_events(self):
+        self._write("preflight_fail_host1_1.json",
+                    {"at": "2026-01-01T00:00:00Z", "checks": ["INPUT_MOUNT"]})
+        self._write("preflight_warn_host1_2.json",
+                    {"at": "2026-01-02T00:00:00Z", "checks": ["Azure AI credential (LLM/OCR)"]})
+        events = store.preflight_events()
+        self.assertEqual(len(events), 2)
+        self.assertEqual(events[0]["at"], "2026-01-02T00:00:00Z")   # newest first
+
+    def test_no_events_dir_returns_empty(self):
+        shutil.rmtree(self.events_dir)
+        self.assertEqual(store.preflight_events(), [])
+
+
 class LoopbackOnly(unittest.TestCase):
     def test_server_binds_loopback(self):
         srv = ui.Server(("127.0.0.1", 0), ui.H)

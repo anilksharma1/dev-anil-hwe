@@ -261,6 +261,13 @@ S.monitor = () => {
     before letting it keep grinding through the same poison messages.
     <div class="detail" style="font-family:var(--mono);font-size:11.5px;margin-top:6px;color:var(--ink-3)">${m.dlq_events.slice(0,8).map(e=>esc(e.at||'')+' · '+esc(e.worker_instance||'')+' · '+fmt(e.dlq_growth)+' new dead-letter(s) over '+fmt(e.completions)+' completion(s) ('+(e.rate!=null?(e.rate*100).toFixed(1):'?')+'% vs '+((e.threshold||0)*100).toFixed(0)+'% threshold)').join('<br>')}</div></div>`:''}
 
+  ${(m.preflight_events||[]).length?`<div class="callout alarm" style="margin-top:14px">
+    <b>${fmt(m.preflight_events.length)} worker startup preflight issue(s) recently.</b>
+    A worker found a problem at startup — a broken Azure credential, a missing mount, or
+    scaling-lib not importable — before it ever touched a file. If files are failing LLM/OCR
+    calls or a worker won't come up, this is almost certainly why.
+    <div class="detail" style="font-family:var(--mono);font-size:11.5px;margin-top:6px;color:var(--ink-3)">${m.preflight_events.slice(0,8).map(e=>esc(e.at||'')+' · '+esc(e.worker_instance||'')+' · '+(e.checks||[]).map(esc).join(', ')).join('<br>')}</div></div>`:''}
+
   ${(m.processing_tasks||[]).length?`<h2>In progress right now (${fmt(m.processing_tasks.length)})</h2>
     <div class="card"><div class="tblwrap"><table><thead><tr><th>File</th><th>Worker</th>
     <th class="n">Attempt</th><th class="n">Elapsed</th></tr></thead><tbody>

@@ -772,6 +772,10 @@ def monitor_payload(job_id: str) -> dict:
         m["dlq_events"] = store.dlq_events()
     except Exception:
         m["dlq_events"] = []
+    try:
+        m["preflight_events"] = store.preflight_events()
+    except Exception:
+        m["preflight_events"] = []
     # throughput_fpm + eta_range_min are computed in job_metrics (trailing window, guarded).
     return m
 

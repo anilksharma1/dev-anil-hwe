@@ -391,18 +391,13 @@ def failures(job_id: str) -> list:
     return out
 
 
-def dlq_events(max_age_hours: float = 24.0, limit: int = 20) -> list:
-    """Recent DLQ circuit-breaker trips (worker.py's _write_dlq_trip_event), so a run that
-    stalls because workers keep self-terminating under dead-letter back-pressure shows an
-    actual reason on Monitor instead of nothing -- worker logs are deliberately not tailed in
-    this UI (they're a Log Analytics query across every replica), so without this the operator
-    had no way to see it here at all.
-
-    Read straight off OUTPUT_MOUNT/_events/ -- the one place every worker AND this ops-VM
-    process can both reach, so no new Azure resource is needed. Fleet-wide, not job-scoped
-    (a circuit-breaker trip isn't tied to one job_id). Best-effort: an unreadable/malformed
-    event file is skipped, never raised; there is deliberately no retention/cleanup of these
-    small marker files yet -- they accumulate under _events/ until an operator clears them.
+def _read_events(glob_pattern: str, max_age_hours: float, limit: int) -> list:
+    """Shared reader for worker.py's OUTPUT_MOUNT/_events/ markers (worker.py's _write_event) --
+    the one place every worker AND this ops-VM process can both reach, so no new Azure
+    resource is needed for any of these. Fleet-wide, not job-scoped. Best-effort: an
+    unreadable/malformed event file is skipped, never raised; there is deliberately no
+    retention/cleanup of these small marker files yet -- they accumulate under _events/
+    until an operator clears them.
     """
     out_mount = os.environ.get("OUTPUT_MOUNT", "")
     events_dir = os.path.join(out_mount, "_events") if out_mount else ""
@@ -413,7 +408,7 @@ def dlq_events(max_age_hours: float = 24.0, limit: int = 20) -> list:
     import time as _time
     cutoff = _time.time() - max_age_hours * 3600
     events = []
-    for path in glob.glob(os.path.join(events_dir, "dlq_trip_*.json")):
+    for path in glob.glob(os.path.join(events_dir, glob_pattern)):
         try:
             if os.path.getmtime(path) < cutoff:
                 continue
@@ -423,6 +418,26 @@ def dlq_events(max_age_hours: float = 24.0, limit: int = 20) -> list:
             events.append(ev)
         except (OSError, ValueError):
             continue
+    events.sort(key=lambda e: e.get("at", ""), reverse=True)
+    return events[:limit]
+
+
+def dlq_events(max_age_hours: float = 24.0, limit: int = 20) -> list:
+    """Recent DLQ circuit-breaker trips (worker.py's _write_dlq_trip_event), so a run that
+    stalls because workers keep self-terminating under dead-letter back-pressure shows an
+    actual reason on Monitor instead of nothing -- worker logs are deliberately not tailed in
+    this UI (they're a Log Analytics query across every replica), so without this the operator
+    had no way to see it here at all."""
+    return _read_events("dlq_trip_*.json", max_age_hours, limit)
+
+
+def preflight_events(max_age_hours: float = 24.0, limit: int = 20) -> list:
+    """Recent worker startup preflight failures/warnings (worker.py's _run_preflight_or_exit)
+    -- e.g. a broken Azure AI credential, so 'every legacy/structured file fails LLM auth'
+    shows up as one clear startup event instead of being discovered file-by-file."""
+    required = _read_events("preflight_fail_*.json", max_age_hours, limit)
+    optional = _read_events("preflight_warn_*.json", max_age_hours, limit)
+    events = required + optional
     events.sort(key=lambda e: e.get("at", ""), reverse=True)
     return events[:limit]
 

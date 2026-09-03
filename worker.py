@@ -42,33 +42,36 @@ _worker_completions: int = 0
 _worker_completions_lock = threading.Lock()
 
 
-def _write_dlq_trip_event(dlq_growth: int, done: int, rate: float) -> None:
-    """Durable, UI-visible record of a circuit-breaker trip.
+def _write_event(prefix: str, **fields) -> None:
+    """Durable, UI-visible marker under OUTPUT_MOUNT/_events/<prefix>_<host>_<ts_ms>.json.
 
-    logging.critical() alone is invisible to an operator by design here -- worker logs are
-    deliberately not tailed in the UI (they're a Log Analytics query across ~N replicas), so
-    without this an operator just sees the run stall/slow, with no reason why, exactly the
-    complaint this fixes. OUTPUT_MOUNT is already the one thing every worker AND the ops-VM
-    UI can both read, so a small JSON marker there (no new Azure resource, nothing to
-    provision) is enough for hwe_scaled_store.dlq_events() to surface as a Monitor alert.
-    Best-effort: a failure to write this must never turn into a reason NOT to trip the
-    breaker, so it's wrapped and swallowed by the caller.
+    OUTPUT_MOUNT is already the one thing every worker AND the ops-VM UI can both read, so
+    this needs no new Azure resource. Used for anything worth surfacing on Monitor that
+    logging.critical() alone would leave invisible to an operator -- worker logs are
+    deliberately not tailed in this UI (a Log Analytics query across every replica), so
+    without a durable marker like this, "why did the run stall / why do containers keep
+    restarting" has no answer short of digging through logs by hand. Best-effort by design:
+    every caller wraps this so a failure to WRITE the marker never blocks or masks the real
+    event it's describing.
     """
     import socket
     events_dir = Path(os.environ.get("OUTPUT_MOUNT", ".")) / "_events"
     events_dir.mkdir(parents=True, exist_ok=True)
     host = socket.gethostname()
     ts_ms = int(time.time() * 1000)
-    event = {
-        "type": "dlq_circuit_breaker", "at": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + "Z",
-        "worker_instance": host, "dlq_growth": dlq_growth, "completions": done,
-        "rate": round(dlq_growth / done, 4) if done else None, "threshold": _DLQ_FAILURE_RATE,
-        "pid": os.getpid(),
-    }
-    path = events_dir / f"dlq_trip_{host}_{ts_ms}.json"
+    event = {"at": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + "Z",
+             "worker_instance": host, "pid": os.getpid(), **fields}
+    path = events_dir / f"{prefix}_{host}_{ts_ms}.json"
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(event), encoding="utf-8")
     tmp.replace(path)
+
+
+def _write_dlq_trip_event(dlq_growth: int, done: int, rate: float) -> None:
+    """Durable, UI-visible record of a circuit-breaker trip -- see _write_event."""
+    _write_event("dlq_trip", type="dlq_circuit_breaker",
+                 dlq_growth=dlq_growth, completions=done,
+                 rate=round(dlq_growth / done, 4) if done else None, threshold=_DLQ_FAILURE_RATE)
 
 
 def _dlq_monitor(baseline_dlq: int) -> None:
@@ -378,6 +381,102 @@ def process(file_path: str, output_dir: Path) -> None:
             _worker_completions += 1
 
 
+def _preflight_checks(cfg: Config) -> list[dict]:
+    """Fail fast and loud on the misconfigurations that, per operator feedback, are the
+    frequent, hard-to-diagnose ones: scaling-lib not actually importable in this venv, a
+    mount that isn't really there, and Azure auth that's broken -- normally discovered only
+    much later, as a per-file 'llm_failed:AuthenticationError' three stages deep, which reads
+    like a data problem rather than the systemic auth/config problem it actually is.
+
+    Each check is {name, required, ok, detail}. `required` checks (scaling_lib import, both
+    mounts) block startup outright -- there is nothing useful this worker could do without
+    them. LLM/OCR credential checks are NOT required (a corpus with USE_LLM/USE_OCR off, or a
+    transient network blip, shouldn't block ordinary rules-only processing) but their failure
+    is logged CRITICAL and written as a durable, UI-visible event -- exactly the earlier
+    "why did every legacy/structured file fail with an auth error" case, caught once at
+    startup instead of discovered file-by-file.
+    """
+    checks = []
+
+    def add(name, required, ok, detail):
+        checks.append({"name": name, "required": required, "ok": ok, "detail": detail})
+
+    try:
+        import scaling_lib
+        from scaling_lib._version import get_commit_hash
+        commit = None
+        try:
+            commit = get_commit_hash()
+        except Exception:
+            pass
+        add("scaling_lib import", True, True,
+            f"OK (commit {commit})" if commit else "OK")
+    except Exception as exc:
+        add("scaling_lib import", True, False, f"{type(exc).__name__}: {exc}")
+
+    for mount_env, need_write in (("INPUT_MOUNT", False), ("OUTPUT_MOUNT", True)):
+        path = os.environ.get(mount_env, "")
+        if not path:
+            add(mount_env, True, False, "not set")
+        elif not os.path.isdir(path):
+            add(mount_env, True, False, f"not a readable directory: {path}")
+        elif need_write and not os.access(path, os.W_OK):
+            add(mount_env, True, False, f"not writable: {path}")
+        else:
+            add(mount_env, True, True, path)
+
+    try:
+        from scaling_lib.queue import queue_status
+        counts = queue_status()
+        add("storage queue/table reachable", True, True,
+            f"queue_count={counts.get('queue_count')}")
+    except Exception as exc:
+        add("storage queue/table reachable", True, False, f"{type(exc).__name__}: {exc}")
+
+    if getattr(cfg, "use_llm", False) or getattr(cfg, "use_ocr", False):
+        try:
+            from scaling_lib._config import _credential
+            cred = _credential()
+            cred.get_token("https://cognitiveservices.azure.com/.default")
+            add("Azure AI credential (LLM/OCR)", False, True, "acquired a token")
+        except Exception as exc:
+            add("Azure AI credential (LLM/OCR)", False, False,
+                f"{type(exc).__name__}: {exc} -- every USE_LLM/USE_OCR call will fail auth "
+                f"until this is fixed (check AZURE_CREDENTIAL_TYPE and the managed identity's "
+                f"role on the Azure OpenAI/Document Intelligence resource)")
+
+    return checks
+
+
+def _run_preflight_or_exit(cfg: Config) -> None:
+    checks = _preflight_checks(cfg)
+    logging.info("preflight: python=%s venv=%s cwd=%s", sys.version.split()[0], sys.prefix, os.getcwd())
+    failed_required, failed_optional = [], []
+    for c in checks:
+        level = logging.INFO if c["ok"] else (logging.CRITICAL if c["required"] else logging.WARNING)
+        logging.log(level, "preflight: %-32s %s -- %s",
+                    c["name"], "OK" if c["ok"] else "FAILED", c["detail"])
+        if not c["ok"]:
+            (failed_required if c["required"] else failed_optional).append(c)
+    if failed_optional:
+        try:
+            _write_event("preflight_warn", type="preflight_warning",
+                         checks=[c["name"] for c in failed_optional],
+                         detail=[c["detail"] for c in failed_optional])
+        except Exception:
+            logging.warning("preflight: failed to write the warning event file", exc_info=True)
+    if failed_required:
+        try:
+            _write_event("preflight_fail", type="preflight_failure",
+                         checks=[c["name"] for c in failed_required],
+                         detail=[c["detail"] for c in failed_required])
+        except Exception:
+            logging.warning("preflight: failed to write the failure event file", exc_info=True)
+        logging.critical("preflight: refusing to start -- %d required check(s) failed: %s",
+                         len(failed_required), ", ".join(c["name"] for c in failed_required))
+        sys.exit(1)
+
+
 def main() -> None:
     global _cfg
 
@@ -392,6 +491,7 @@ def main() -> None:
     args = parser.parse_args()
 
     _cfg = _build_config(ocr=args.ocr, llm=args.llm, ner=args.ner)
+    _run_preflight_or_exit(_cfg)
 
     # Initialise runner globals before Worker starts threads.
     # Done here (not inside process()) to avoid clobbering the main process's SIGINT handler.

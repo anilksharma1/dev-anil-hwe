@@ -129,5 +129,104 @@ class DlqTripEvent(unittest.TestCase):
         self.assertIsNone(ev["rate"])
 
 
+class PreflightChecks(unittest.TestCase):
+    """Gap 4: scaling-lib/auth/mount misconfigurations must fail fast and loud at startup,
+    not three stages deep as a per-file 'llm_failed:AuthenticationError'."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.in_mount = os.path.join(self.d, "in")
+        self.out_mount = os.path.join(self.d, "out")
+        os.makedirs(self.in_mount)
+        os.makedirs(self.out_mount)
+        self._orig_env = {k: os.environ.get(k) for k in ("INPUT_MOUNT", "OUTPUT_MOUNT")}
+        os.environ["INPUT_MOUNT"] = self.in_mount
+        os.environ["OUTPUT_MOUNT"] = self.out_mount
+
+        import scaling_lib.queue as sl_queue
+        self.sl_queue = sl_queue
+        self._orig_queue_status = sl_queue.queue_status
+        sl_queue.queue_status = lambda: {"queue_count": 3, "dead_letter_count": 0}
+
+        self.cfg = Config(root=self.in_mount, rulepack=load_rulepack(None))
+
+    def tearDown(self):
+        for k, v in self._orig_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        self.sl_queue.queue_status = self._orig_queue_status
+        shutil.rmtree(self.d, ignore_errors=True)
+
+    def test_all_pass_when_mounts_ok_and_llm_off(self):
+        checks = worker._preflight_checks(self.cfg)
+        self.assertTrue(all(c["ok"] for c in checks), checks)
+        names = {c["name"] for c in checks}
+        self.assertIn("scaling_lib import", names)
+        self.assertIn("INPUT_MOUNT", names)
+        self.assertIn("OUTPUT_MOUNT", names)
+        self.assertNotIn("Azure AI credential (LLM/OCR)", names)   # not checked when LLM/OCR off
+
+    def test_missing_input_mount_fails_a_required_check(self):
+        os.environ["INPUT_MOUNT"] = os.path.join(self.d, "does-not-exist")
+        checks = worker._preflight_checks(self.cfg)
+        c = next(c for c in checks if c["name"] == "INPUT_MOUNT")
+        self.assertFalse(c["ok"])
+        self.assertTrue(c["required"])
+
+    def test_queue_unreachable_fails_a_required_check(self):
+        def boom():
+            raise RuntimeError("no route to host")
+        self.sl_queue.queue_status = boom
+        checks = worker._preflight_checks(self.cfg)
+        c = next(c for c in checks if c["name"] == "storage queue/table reachable")
+        self.assertFalse(c["ok"])
+        self.assertTrue(c["required"])
+
+    def test_llm_credential_checked_only_when_llm_or_ocr_enabled(self):
+        checks = worker._preflight_checks(self.cfg)   # use_llm/use_ocr default False
+        self.assertFalse(any(c["name"] == "Azure AI credential (LLM/OCR)" for c in checks))
+
+        from dataclasses import replace
+        import scaling_lib._config as sl_config
+        orig_cred = sl_config._credential
+
+        class _FakeCred:
+            def get_token(self, scope):
+                raise RuntimeError("no az login")
+        sl_config._credential = lambda: _FakeCred()
+        try:
+            checks2 = worker._preflight_checks(replace(self.cfg, use_llm=True))
+        finally:
+            sl_config._credential = orig_cred
+        c = next(c for c in checks2 if c["name"] == "Azure AI credential (LLM/OCR)")
+        self.assertFalse(c["ok"])
+        self.assertFalse(c["required"])   # warns, never blocks startup by itself
+
+    def test_run_preflight_or_exit_raises_systemexit_on_required_failure(self):
+        os.environ["INPUT_MOUNT"] = os.path.join(self.d, "does-not-exist")
+        with self.assertRaises(SystemExit):
+            worker._run_preflight_or_exit(self.cfg)
+        events = list((Path(self.out_mount) / "_events").glob("preflight_fail_*.json"))
+        self.assertEqual(len(events), 1)
+
+    def test_run_preflight_or_exit_does_not_exit_on_optional_failure_only(self):
+        from dataclasses import replace
+        import scaling_lib._config as sl_config
+        orig_cred = sl_config._credential
+
+        class _FakeCred:
+            def get_token(self, scope):
+                raise RuntimeError("no az login")
+        sl_config._credential = lambda: _FakeCred()
+        try:
+            worker._run_preflight_or_exit(replace(self.cfg, use_llm=True))   # must NOT raise
+        finally:
+            sl_config._credential = orig_cred
+        events = list((Path(self.out_mount) / "_events").glob("preflight_warn_*.json"))
+        self.assertEqual(len(events), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
