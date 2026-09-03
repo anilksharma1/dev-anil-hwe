@@ -882,6 +882,69 @@ class PreflightEvents(unittest.TestCase):
         self.assertEqual(store.preflight_events(), [])
 
 
+class AuditTrail(unittest.TestCase):
+    """Gap 9: the audit trail must actually be readable, not just a file nobody opens; and it
+    must cover every action this UI takes, not just submit/reset."""
+
+    def setUp(self):
+        self._orig_audit_path = ui.AUDIT_PATH
+        self.d = tempfile.mkdtemp()
+        ui.AUDIT_PATH = os.path.join(self.d, "_audit.jsonl")
+
+    def tearDown(self):
+        ui.AUDIT_PATH = self._orig_audit_path
+        shutil.rmtree(self.d, ignore_errors=True)
+
+    def test_read_audit_is_newest_first(self):
+        ui.audit("submit", run_id="R1")
+        ui.audit("collect", run_id="R1")
+        entries = ui.read_audit()
+        self.assertEqual([e["action"] for e in entries], ["collect", "submit"])
+
+    def test_read_audit_on_missing_file_is_empty(self):
+        self.assertEqual(ui.read_audit(), [])
+
+    def test_read_audit_respects_limit(self):
+        for i in range(5):
+            ui.audit("report", run_id=f"R{i}")
+        entries = ui.read_audit(limit=2)
+        self.assertEqual(len(entries), 2)
+        self.assertEqual(entries[0]["run_id"], "R4")   # the two most recent
+
+    def test_malformed_line_is_skipped_not_raised(self):
+        ui.audit("sample", run_id="R1")
+        with open(ui.AUDIT_PATH, "a", encoding="utf-8") as fh:
+            fh.write("{not json\n")
+        entries = ui.read_audit()   # must not raise
+        self.assertEqual(len(entries), 1)
+
+    def test_every_entry_carries_who_and_when(self):
+        ui.audit("benchmark", run_id="R1")
+        e = ui.read_audit()[0]
+        self.assertIn("user", e)
+        self.assertIn("at", e)
+
+    def test_stage_start_writes_an_audit_entry(self):
+        src = tempfile.mkdtemp(dir=self.d)
+        with open(os.path.join(src, "a.txt"), "w", encoding="utf-8") as fh:
+            fh.write("x")
+        dest = os.path.join(self.d, "mount", "job1")
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        orig_input_mount = os.environ.get("INPUT_MOUNT")
+        os.environ["INPUT_MOUNT"] = os.path.dirname(dest)
+        try:
+            res = ui.stage_start(src, dest)
+            self.assertTrue(res["ok"], res)
+        finally:
+            if orig_input_mount is None:
+                os.environ.pop("INPUT_MOUNT", None)
+            else:
+                os.environ["INPUT_MOUNT"] = orig_input_mount
+        entries = ui.read_audit()
+        self.assertEqual(entries[0]["action"], "stage_start")
+        self.assertEqual(entries[0]["files"], 1)
+
+
 class LoopbackOnly(unittest.TestCase):
     def test_server_binds_loopback(self):
         srv = ui.Server(("127.0.0.1", 0), ui.H)

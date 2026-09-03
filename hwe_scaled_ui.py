@@ -981,6 +981,29 @@ def release_lock():
         pass
 
 
+def read_audit(limit: int = 200) -> list:
+    """Most recent audit entries, newest first -- who ran what, when, and its outcome, across
+    every action this UI took (submit, collect, report, sample, benchmark, score, compare,
+    stage, reset). Written but never previously surfaced anywhere; this is what makes the
+    audit trail actually readable rather than just a file nobody opens. Best-effort: an
+    unreadable/malformed line is skipped, never raised."""
+    if not os.path.isfile(AUDIT_PATH):
+        return []
+    try:
+        with open(AUDIT_PATH, "r", encoding="utf-8") as fh:
+            lines = fh.readlines()
+    except OSError:
+        return []
+    out = []
+    for line in lines[-limit:]:
+        try:
+            out.append(json.loads(line))
+        except (json.JSONDecodeError, ValueError):
+            continue
+    out.reverse()
+    return out
+
+
 def audit(action: str, **fields) -> dict:
     rec = {"action": action, "user": whoami(), "at": now_iso(), **fields}
     os.makedirs(RUNS, exist_ok=True)
@@ -1024,6 +1047,7 @@ def stage_start(src: str, dest_job_dir: str, protocol_src: str | None = None) ->
                   "files_dir": os.path.join(dest_job_dir, "files"), "protocol": None}
     threading.Thread(target=_stage_worker, args=(sid, src, dest_job_dir, protocol_src),
                      daemon=True).start()
+    audit("stage_start", stage_id=sid, files=total, total_bytes=total_bytes)
     return {"ok": True, "id": sid, "total": total, "total_bytes": total_bytes,
             "files_dir": os.path.join(dest_job_dir, "files")}
 
@@ -1339,6 +1363,9 @@ class H(http.server.BaseHTTPRequestHandler):
             return self._json(live)
         if route == "/api/build/preflight":
             return self._json(build_preflight())
+        if route == "/api/audit":
+            limit = int((q.get("limit") or ["200"])[0])
+            return self._json({"entries": read_audit(limit)})
         if route == "/api/runs":
             runs = []
             for r in all_runs():
@@ -1422,6 +1449,7 @@ class H(http.server.BaseHTTPRequestHandler):
                 if m:
                     m.update({"status": "collected", "collected_at": now_iso()})
                     jdump(meta_path(rid), m)
+            audit("collect", run_id=rid, ok=res.get("ok"), rows_written=res.get("rows_written"))
             return self._json(res)
 
         if route in ("/api/report", "/api/sample", "/api/benchmark"):
@@ -1438,6 +1466,7 @@ class H(http.server.BaseHTTPRequestHandler):
             res = run_tool(argv)
             res["argv_str"] = " ".join(_q(x) for x in argv)
             res["rows"] = read_table_csv(out_csv) if os.path.isfile(out_csv) else []
+            audit("report", run_id=rid, ok=res.get("ok"), rows=len(res["rows"]))
             return self._json(res)
 
         if route == "/api/sample":
@@ -1453,6 +1482,7 @@ class H(http.server.BaseHTTPRequestHandler):
                 m = jload(meta_path(rid)) or {}
                 m["sample"] = {"rate": rate, "seed": seed, "at": now_iso(), "by": whoami()}
                 jdump(meta_path(rid), m)
+            audit("sample", run_id=rid, ok=res.get("ok"), rate=rate, seed=seed, rows=len(res["rows"]))
             return self._json(res)
 
         if route == "/api/benchmark":
@@ -1470,6 +1500,7 @@ class H(http.server.BaseHTTPRequestHandler):
                     fh.write(res.get("out", ""))
             except OSError:
                 pass
+            audit("benchmark", run_id=rid, ok=res.get("ok"))
             return self._json(res)
 
         if route == "/api/score":
@@ -1498,6 +1529,8 @@ class H(http.server.BaseHTTPRequestHandler):
                 res["scorecard"] = os.path.join(score_dir, cards[-1]) if cards else None
             except OSError:
                 res["scorecard"] = None
+            audit("score", run_id=rid, ok=res.get("ok"),
+                 recall=res["summary"].get("recall"), precision=res["summary"].get("precision"))
             return self._json(res)
 
         if route == "/api/compare":
@@ -1514,6 +1547,7 @@ class H(http.server.BaseHTTPRequestHandler):
             res["ok"] = True
             res["a_name"] = ra.get("name")
             res["b_name"] = rb.get("name")
+            audit("compare", run_a=ra.get("id"), run_b=rb.get("id"), moved=res.get("moved_count"))
             return self._json(res)
 
         if route == "/api/newrun/check":
