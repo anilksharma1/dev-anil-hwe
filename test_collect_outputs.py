@@ -126,6 +126,21 @@ class WatchStateSidecar(unittest.TestCase):
             co.watch(self.out, interval=0.01, max_iterations=1)
         self.assertEqual(ctx.exception.code, 2)
 
+    def test_writes_complete_and_partial_batch_snapshots(self):
+        rows = [{"rel_path": f"file-{i}.txt", "status": "ok"} for i in range(5)]
+        with open(self.out, "w", encoding="utf-8", newline="") as fh:
+            writer = csv.DictWriter(fh, fieldnames=["rel_path", "status"])
+            writer.writeheader()
+            writer.writerows(rows)
+
+        self.assertEqual(co._write_batch_snapshots(self.out, batch_size=2), 2)
+        self.assertTrue(os.path.exists(os.path.join(self.d, "inventory_batch1.csv")))
+        self.assertTrue(os.path.exists(os.path.join(self.d, "inventory_batch2.csv")))
+        self.assertFalse(os.path.exists(os.path.join(self.d, "inventory_batch3.csv")))
+        self.assertEqual(co._write_batch_snapshots(self.out, batch_size=2, include_partial=True), 1)
+        with open(os.path.join(self.d, "inventory_batch3.csv"), newline="", encoding="utf-8") as fh:
+            self.assertEqual(len(list(csv.DictReader(fh))), 1)
+
 
 class WatchLoop(unittest.TestCase):
     """watch() end-to-end: stop-on-drain and resume-from-sidecar."""

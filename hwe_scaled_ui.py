@@ -43,6 +43,7 @@ import csv
 import http.server
 import io
 import json
+import logging
 import os
 import shutil
 import socket
@@ -440,6 +441,12 @@ def build_collect_argv(out_csv: str) -> list:
     """collect_outputs.py gathers each worker's result.json (across the drained table) into one
     inventory CSV — the 'save this run' step. Written into the run's own folder."""
     return [sys.executable, os.path.join(ROOT, "collect_outputs.py"), "--out", out_csv]
+
+
+def build_watch_argv(out_csv: str, interval: float = 15.0, batch_size: int = 100) -> list:
+    """Start the live collector that writes the cumulative inventory and batch snapshots."""
+    return [sys.executable, os.path.join(ROOT, "collect_outputs.py"), "--out", out_csv,
+            "--watch", "--interval", str(interval), "--batch-size", str(batch_size)]
 
 
 def build_report_argv(inventory: str, out_csv: str) -> list:
@@ -1020,6 +1027,17 @@ def submit_run(job_dir: str, mode: str = "job", name: str = "",
     }
     jdump(os.path.join(rundir, "run.json"), meta)
     acquire_lock(run_id, job_id, v["job_dir"])
+    watch_argv = build_watch_argv(meta["inventory"])
+    try:
+        watch_log = open(os.path.join(rundir, "inventory_watch.log"), "a", encoding="utf-8")
+        subprocess.Popen(watch_argv, cwd=ROOT, stdout=watch_log, stderr=subprocess.STDOUT,
+                         env=_tool_env(), start_new_session=True)
+        watch_log.close()
+        meta["watch_argv"] = watch_argv
+        meta["watch_started"] = now_iso()
+        jdump(os.path.join(rundir, "run.json"), meta)
+    except Exception as exc:
+        logging.warning("could not start incremental collector: %s", exc)
     audit("submit", run_id=run_id, job_id=job_id, files=chk["files"], windows=chk["windows_count"], mode=mode)
     return {"ok": True, "id": run_id, "job_id": job_id, "windows_count": chk["windows_count"],
             "argv_str": argv_str, "out": res["out"]}

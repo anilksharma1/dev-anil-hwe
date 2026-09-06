@@ -360,6 +360,46 @@ def _save_watch_state(state_path: str, seen: set) -> None:
     os.replace(tmp, state_path)
 
 
+def _write_batch_snapshots(out_path: str, batch_size: int = 100,
+                           include_partial: bool = False) -> int:
+    """Write immutable 100-row snapshots beside the live inventory.
+
+    The live inventory remains the source of truth. Rebuilding missing snapshots from it
+    makes the batch files recoverable when the watcher is restarted after a crash.
+    """
+    from pii_triage.routing import FIELDNAMES
+
+    if batch_size <= 0 or not os.path.exists(out_path):
+        return 0
+    with open(out_path, "r", encoding="utf-8", newline="") as fh:
+        rows = list(csv.DictReader(fh))
+
+    batch_count = len(rows) // batch_size
+    if include_partial and rows and len(rows) % batch_size:
+        batch_count += 1
+    stem, ext = os.path.splitext(out_path)
+    written = 0
+    for batch_number in range(1, batch_count + 1):
+        start = (batch_number - 1) * batch_size
+        batch_rows = rows[start:start + batch_size]
+        if len(batch_rows) < batch_size and not include_partial:
+            break
+        batch_path = f"{stem}_batch{batch_number}{ext}"
+        if os.path.exists(batch_path):
+            continue
+        tmp_path = batch_path + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8", newline="") as fh:
+            writer = csv.DictWriter(fh, fieldnames=FIELDNAMES,
+                                    extrasaction="ignore", restval="")
+            writer.writeheader()
+            writer.writerows(batch_rows)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp_path, batch_path)
+        written += 1
+    return written
+
+
 def _is_drained() -> bool:
     """True once no row anywhere in the table is pending/processing. Table-wide, matching
     collect()'s own table-wide scope (there is no --job-id on collect)."""
@@ -418,7 +458,8 @@ def collect_incremental(out_path: str, seen: set, concurrency: int = 32) -> tupl
 
 
 def watch(out_path: str = "inventory.csv", interval: float = 15.0, concurrency: int = 32,
-          restart: bool = False, max_iterations: int | None = None) -> int:
+          restart: bool = False, max_iterations: int | None = None,
+          batch_size: int = 100) -> int:
     """Continuously append newly-completed files into out_path as they finish, instead of
     only collecting once the whole queue has drained. Crash-safe and restartable: a
     sidecar <out_path>.watch_state.json tracks which Table rows are already written, the
@@ -428,6 +469,8 @@ def watch(out_path: str = "inventory.csv", interval: float = 15.0, concurrency: 
     drained check and the final pass is still caught by that last pass), or on Ctrl+C --
     either way, already-written rows and the resume state are safe on disk.
     `max_iterations` is a test hook; leave it None to run until drained/interrupted.
+    Full `<out>_batchN.csv` files are created every `batch_size` records; the final
+    partial batch is created when the queue drains.
     """
     state_path = _watch_state_path(out_path)
 
@@ -461,6 +504,7 @@ def watch(out_path: str = "inventory.csv", interval: float = 15.0, concurrency: 
             if n:
                 total_written += n
                 _save_watch_state(state_path, seen)
+                _write_batch_snapshots(out_path, batch_size)
                 sys.stderr.write(f"  +{n} (total {total_written})\n")
             iterations += 1
             if max_iterations is not None and iterations >= max_iterations:
@@ -470,11 +514,14 @@ def watch(out_path: str = "inventory.csv", interval: float = 15.0, concurrency: 
                 if n:
                     total_written += n
                     _save_watch_state(state_path, seen)
+                    _write_batch_snapshots(out_path, batch_size)
                     sys.stderr.write(f"  +{n} (total {total_written})\n")
+                _write_batch_snapshots(out_path, batch_size, include_partial=True)
                 sys.stderr.write(f"queue drained -- stopping. {total_written} record(s) in {out_path}\n")
                 break
             time.sleep(interval)
     except KeyboardInterrupt:
+        _write_batch_snapshots(out_path, batch_size, include_partial=True)
         sys.stderr.write(f"\ninterrupted -- {total_written} record(s) in {out_path} so far "
                          f"(state saved; rerun --watch to resume)\n")
     return total_written
@@ -498,13 +545,15 @@ if __name__ == "__main__":
     p.add_argument("--restart", action="store_true",
                    help="--watch only: discard an existing --out and its watch-state sidecar, "
                         "and start fresh")
+    p.add_argument("--batch-size", type=int, default=100,
+                   help="--watch only: records per inventory_batchN.csv snapshot (default: 100)")
     a = p.parse_args()
 
     from dotenv import load_dotenv
     load_dotenv(a.env_file)
 
     if a.watch:
-        watch(a.out, a.interval, a.concurrency, a.restart)
+        watch(a.out, a.interval, a.concurrency, a.restart, batch_size=a.batch_size)
     else:
         collect(a.out, a.concurrency)
     if not a.no_timing:

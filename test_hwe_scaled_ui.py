@@ -65,6 +65,11 @@ class CommandConstruction(unittest.TestCase):
         self.assertTrue(a[1].endswith("collect_outputs.py"))
         self.assertEqual(a[-2:], ["--out", "runs/2026/inventory.csv"])
 
+    def test_watch_argv_writes_batches(self):
+        a = ui.build_watch_argv("runs/2026/inventory.csv")
+        self.assertIn("--watch", a)
+        self.assertEqual(a[a.index("--batch-size") + 1], "100")
+
     def test_sample_argv_has_rate_and_seed(self):
         a = ui.build_sample_argv("inv.csv", "s.csv", 0.05, 12345)
         self.assertIn("--rate", a)
