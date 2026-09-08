@@ -20,6 +20,11 @@ Usage
     python build_inventory_excel_report.py INVENTORY_CSV --initials HK \\
         --description "matter 12345 triage results" --bde-threshold 51
 
+    python build_inventory_excel_report.py   # no args -- prompts via tkinter
+
+If INVENTORY_CSV or --bde-threshold is omitted, a tkinter dialog prompts for
+it (a file picker for the CSV, a number prompt for the threshold, default 51).
+
 If --out is not given, the output filename is built from the EXO Edge
 naming convention: "yymmdd XX description.xlsx" (yymmdd = --date or today,
 XX = --initials, uppercased). You'll be prompted for --initials if it's
@@ -58,6 +63,12 @@ from pathlib import Path
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
+try:
+    import tkinter as tk
+    from tkinter import filedialog, simpledialog
+except ImportError:  # pragma: no cover - tkinter unavailable (headless/minimal Python)
+    tk = None
+
 DEFAULT_BDE_THRESHOLD = 51
 DEFAULT_DESCRIPTION = "pii triage aggregated results"
 
@@ -93,12 +104,15 @@ def parse_args(argv=None) -> argparse.Namespace:
                      "Responsive-NR Excel report from a pii_triage inventory.csv.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    p.add_argument("inventory_csv", help="Path to the inventory.csv to aggregate.")
+    p.add_argument("inventory_csv", nargs="?", default=None,
+                    help="Path to the inventory.csv to aggregate. If omitted, a tkinter "
+                         "file-picker dialog prompts for it.")
     p.add_argument("--out", help="Output .xlsx path. If omitted, built from "
                                   "--date/--initials/--description per the "
                                   "'yymmdd XX description.xlsx' naming convention.")
-    p.add_argument("--bde-threshold", type=int, default=DEFAULT_BDE_THRESHOLD,
-                    help="Estimated-entities threshold for the BDE Tag column.")
+    p.add_argument("--bde-threshold", type=int, default=None,
+                    help="Estimated-entities threshold for the BDE Tag column. If omitted, "
+                         f"a tkinter dialog prompts for it (default {DEFAULT_BDE_THRESHOLD}).")
     p.add_argument("--initials", help="2-letter author initials (used in the default filename).")
     p.add_argument("--description", default=DEFAULT_DESCRIPTION,
                     help="Short filename description (used in the default filename).")
@@ -139,6 +153,45 @@ def build_output_path(args: argparse.Namespace) -> Path:
     return Path(args.inventory_csv).resolve().parent / filename
 
 
+def prompt_missing_inputs(args: argparse.Namespace) -> argparse.Namespace:
+    """Fill in inventory_csv / bde_threshold via tkinter dialogs if not passed on the CLI."""
+    if args.inventory_csv and args.bde_threshold is not None:
+        return args
+
+    if tk is None:
+        if not args.inventory_csv:
+            sys.exit("error: inventory_csv not given and tkinter is unavailable to prompt for it")
+        args.bde_threshold = DEFAULT_BDE_THRESHOLD
+        return args
+
+    root = tk.Tk()
+    root.withdraw()
+
+    if not args.inventory_csv:
+        selected = filedialog.askopenfilename(
+            title="Select inventory.csv",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+        )
+        if not selected:
+            root.destroy()
+            sys.exit("error: no inventory.csv selected")
+        args.inventory_csv = selected
+
+    if args.bde_threshold is None:
+        threshold = simpledialog.askinteger(
+            "BDE Threshold",
+            "Estimated-entities threshold for the BDE Tag column:",
+            initialvalue=DEFAULT_BDE_THRESHOLD, minvalue=1,
+        )
+        if threshold is None:
+            root.destroy()
+            sys.exit("error: no BDE threshold provided")
+        args.bde_threshold = threshold
+
+    root.destroy()
+    return args
+
+
 # --------------------------------------------------------------------------- #
 # Data loading + classification
 # --------------------------------------------------------------------------- #
@@ -170,6 +223,15 @@ def load_records(csv_path: Path, args: argparse.Namespace) -> list[dict]:
 
         final_entities, final_bde_tag, flag = apply_consistency_rule(
             status, raw_entities, raw_bde_tag, args.bde_consistency)
+
+        # Lane correction: a Responsive doc with a weak entity count (more than one
+        # signal but below the BDE threshold) and BDE Tag = No belongs in the
+        # "standard" lane, regardless of what the source lane column says.
+        if (status == "Responsive" and final_bde_tag == "No"
+                and 1 < final_entities < args.bde_threshold and lane != "standard"):
+            flag = f"{flag}; " if flag else ""
+            flag += f"lane forced to standard (was {lane})"
+            lane = "standard"
 
         records.append({
             "doc_id": r.get(args.id_col, ""),
@@ -527,6 +589,7 @@ def build_methodology_sheet(wb: Workbook, csv_path: Path, doc_title: str, bde_th
 
 def main(argv=None) -> int:
     args = parse_args(argv)
+    args = prompt_missing_inputs(args)
     csv_path = Path(args.inventory_csv)
     if not csv_path.exists():
         sys.exit(f"error: {csv_path} not found")
