@@ -722,37 +722,47 @@ def _sheet_run_info(wb, rp):
     row = _kv(ws, row, "Generated", rp["generated"])
     row = _blank(ws, row)
 
+    has_truth = rp.get("has_truth", True)
+
     row = _section(ws, row, "PARAMETERS", 3)
     row = _kv(ws, row, "Pipeline", rp["pipeline_desc"])
-    absent_note = (f"AUTO → '{rp['mode']}' "
-                   f"({'export has zero-count rows' if rp['mode'] == 'unreviewed' else 'no zero-count rows in export'})")
-    row = _kv(ws, row, "Absent-means mode",
-              absent_note if rp["absent_auto"] else f"{rp['mode']} (explicit)")
-    row = _kv(ws, row, "BDE threshold",
-              f"Total Entities > {rp['bde_threshold']} (i.e. ≥ {rp['bde_threshold'] + 1})")
+    if has_truth:
+        absent_note = (f"AUTO → '{rp['mode']}' "
+                       f"({'export has zero-count rows' if rp['mode'] == 'unreviewed' else 'no zero-count rows in export'})")
+        row = _kv(ws, row, "Absent-means mode",
+                  absent_note if rp["absent_auto"] else f"{rp['mode']} (explicit)")
+        row = _kv(ws, row, "BDE threshold",
+                  f"Total Entities > {rp['bde_threshold']} (i.e. ≥ {rp['bde_threshold'] + 1})")
+    else:
+        row = _kv(ws, row, "Ground truth",
+                  "(none — no --entities export provided; accuracy sections skipped)",
+                  val_bg=_C_NR_FAIL)
+        row = _kv(ws, row, "BDE threshold (unused)",
+                  f"Total Entities > {rp['bde_threshold']} (i.e. ≥ {rp['bde_threshold'] + 1})")
     row = _blank(ws, row)
 
     row = _section(ws, row, "POPULATION", 3)
     row = _kpi(ws, row, "Files in inventory", rp["n_inventory"], "total files scanned",
                val_fmt=_NUM)
-    row = _kpi(ws, row, "Scored", rp["n_scored"], "have a ground-truth verdict",
-               val_fmt=_NUM)
-    resp_pct = pct(rp["n_responsive"], rp["n_scored"])
-    row = _kpi(ws, row, "Truly responsive", rp["n_responsive"],
-               f"{resp_pct:.1%} of scored", val_fmt=_NUM)
-    row = _kpi(ws, row, f"Truly BDE (count > {rp['bde_threshold']})",
-               rp["n_bde"], "", val_fmt=_NUM)
+    if has_truth:
+        row = _kpi(ws, row, "Scored", rp["n_scored"], "have a ground-truth verdict",
+                   val_fmt=_NUM)
+        resp_pct = pct(rp["n_responsive"], rp["n_scored"])
+        row = _kpi(ws, row, "Truly responsive", rp["n_responsive"],
+                   f"{resp_pct:.1%} of scored", val_fmt=_NUM)
+        row = _kpi(ws, row, f"Truly BDE (count > {rp['bde_threshold']})",
+                   rp["n_bde"], "", val_fmt=_NUM)
 
-    mr = rp["match_rate"]
-    mr_bg = _C_NR_FAIL if mr < 0.95 else None
-    row = _kv(ws, row, "Entity export ID match rate",
-              f"{mr:.1%}" + (" ← LOW — check --id-col" if mr < 0.95 else ""),
-              val_bg=mr_bg)
-    row = _kv(ws, row, "In export, not in run", rp["reviewed_not_scanned"])
-    if rp["mode"] == "unreviewed":
-        row = _kv(ws, row, "In run, not reviewed", rp["n_not_reviewed"])
+        mr = rp["match_rate"]
+        mr_bg = _C_NR_FAIL if mr < 0.95 else None
+        row = _kv(ws, row, "Entity export ID match rate",
+                  f"{mr:.1%}" + (" ← LOW — check --id-col" if mr < 0.95 else ""),
+                  val_bg=mr_bg)
+        row = _kv(ws, row, "In export, not in run", rp["reviewed_not_scanned"])
+        if rp["mode"] == "unreviewed":
+            row = _kv(ws, row, "In run, not reviewed", rp["n_not_reviewed"])
 
-    if rp["manual_path"]:
+    if has_truth and rp["manual_path"]:
         row = _blank(ws, row)
         row = _section(ws, row, "TRUTH CROSS-CHECK (entities vs manual status)", 3)
         row = _kv(ws, row, "Common files (both sources)", rp.get("xcheck_n", "n/a"))
@@ -1721,8 +1731,12 @@ def _sheet_ocr(wb, rp):
         fg=_C_GTXT, size=10)
     row = _kv(ws, row, "Of those — stage 1 flagged responsive",
               oy["flagged_resp"], val_fmt=_NUM)
-    row = _kv(ws, row, "Of those — truly responsive", oy["truly_resp"], val_fmt=_NUM)
-    row = _kv(ws, row, "Of those — truly BDE", oy["truly_bde"], val_fmt=_NUM)
+    row = _kv(ws, row, "Of those — truly responsive",
+              oy["truly_resp"] if oy["truly_resp"] is not None else "n/a (no ground truth)",
+              val_fmt=_NUM if oy["truly_resp"] is not None else None)
+    row = _kv(ws, row, "Of those — truly BDE",
+              oy["truly_bde"] if oy["truly_bde"] is not None else "n/a (no ground truth)",
+              val_fmt=_NUM if oy["truly_bde"] is not None else None)
 
     if oy["lanes"]:
         row = _blank(ws, row)
@@ -1932,21 +1946,25 @@ def write_scorecard_xlsx(rp, scaling, out_path):
 
     wb = openpyxl.Workbook()
 
+    has_truth = rp.get("has_truth", True)
+
     # Sheet order mirrors the plan
     _sheet_run_info(wb, rp)       # sheet 1 (active)
     _sheet_cost(wb, rp, scaling)  # sheet 2
     _sheet_timing(wb, scaling)    # sheet 3
     _sheet_timeline(wb, scaling)  # sheet 4 (charts — skipped if no scaling data)
-    _sheet_nrr(wb, rp)            # sheet 5
-    _sheet_bde(wb, rp)            # sheet 5
-    _sheet_mbt(wb, rp)            # sheet 6
+    if has_truth:
+        _sheet_nrr(wb, rp)            # sheet 5
+        _sheet_bde(wb, rp)            # sheet 5
+        _sheet_mbt(wb, rp)            # sheet 6
     if rp.get("s2_detail"):
         _sheet_s2(wb, rp)         # sheet 7 (conditional)
     if rp.get("ocr_yield"):
         _sheet_ocr(wb, rp)        # sheet 8 (conditional)
     _sheet_file_detail(wb, rp)    # sheet 9
     _sheet_timing_detail(wb, scaling)  # sheet 10 (skipped if no scaling)
-    _sheet_misses(wb, rp)         # sheet 11
+    if has_truth:
+        _sheet_misses(wb, rp)         # sheet 11 (needs ground truth to know what was missed)
 
     wb.save(out_path)
     _fix_chart_layouts(out_path)
@@ -1959,8 +1977,11 @@ def main():
         description="One scorecard for a combined-run inventory: cost, NR/R, BDE.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     ap.add_argument("--inventory", default=DEFAULT_INVENTORY)
-    ap.add_argument("--entities", required=True,
-                    help="CNG entities export (.csv/.xlsx) with Control ID + Total Entities")
+    ap.add_argument("--entities", default=None,
+                    help="CNG entities export (.csv/.xlsx) with Control ID + Total Entities. "
+                         "Optional -- if omitted, all ground-truth accuracy sections "
+                         "(NR/R Accuracy, BDE Accuracy, Metrics by Type, Misses) are skipped "
+                         "and only Cost/Timing/File Detail are produced.")
     ap.add_argument("--entities-sheet", default="")
     ap.add_argument("--id-col",    default=DEFAULT_ID_COL)
     ap.add_argument("--count-col", default=DEFAULT_COUNT_COL)
@@ -1980,62 +2001,82 @@ def main():
     ap.add_argument("--out-dir", default=".")
     a = ap.parse_args()
 
-    for p in (a.inventory, a.entities):
+    paths_to_check = [a.inventory] + ([a.entities] if a.entities else [])
+    for p in paths_to_check:
         if not os.path.exists(p):
             sys.exit(f"not found: {p}")
     os.makedirs(a.out_dir, exist_ok=True)
 
+    has_truth = bool(a.entities)
+
     recs, has = load_inventory(a.inventory)
-    counts, blanks, dupes = load_entities(a.entities, a.entities_sheet,
-                                          a.id_col, a.count_col)
+    if has_truth:
+        counts, blanks, dupes = load_entities(a.entities, a.entities_sheet,
+                                              a.id_col, a.count_col)
+    else:
+        counts, blanks, dupes = {}, 0, 0
 
     print("=" * 74)
     print("pii_triage COMBINED-RUN SCORECARD")
     print("=" * 74)
     print(f"inventory : {a.inventory}   ({len(recs):,} files)")
-    print(f"entities  : {a.entities}")
-    print(f"            {len(counts):,} files with a numeric count"
-          + (f", {blanks:,} blank/unparseable (dropped)" if blanks else "")
-          + (f", {dupes:,} duplicate Control IDs (kept the larger)" if dupes else ""))
+    if has_truth:
+        print(f"entities  : {a.entities}")
+        print(f"            {len(counts):,} files with a numeric count"
+              + (f", {blanks:,} blank/unparseable (dropped)" if blanks else "")
+              + (f", {dupes:,} duplicate Control IDs (kept the larger)" if dupes else ""))
+    else:
+        print("entities  : (not provided -- ground-truth accuracy sections skipped)")
     stage2_present = has["s2_lane"] and any(r["s2_ran"] for r in recs.values())
     print(f"pipeline  : stage 1 {'+ stage 2' if stage2_present else 'ONLY'}")
 
-    zero_rows = sum(1 for v in counts.values() if v == 0)
-    if a.absent_means == "auto":
-        mode = "unreviewed" if zero_rows else "zero"
-        print(f"\nabsent-means: AUTO -> '{mode}'  "
-              f"(the export contains {zero_rows:,} zero-entity rows)")
+    if has_truth:
+        zero_rows = sum(1 for v in counts.values() if v == 0)
+        if a.absent_means == "auto":
+            mode = "unreviewed" if zero_rows else "zero"
+            print(f"\nabsent-means: AUTO -> '{mode}'  "
+                  f"(the export contains {zero_rows:,} zero-entity rows)")
+        else:
+            mode = a.absent_means
+            print(f"\nabsent-means: {mode} (explicit)")
+
+        if mode == "zero":
+            scored   = sorted(recs)
+            truth_resp = {cid: counts.get(cid, 0) > 0 for cid in scored}
+            truth_bde  = {cid: counts.get(cid, 0) > a.bde_threshold for cid in scored}
+            human      = {cid: counts.get(cid, 0) for cid in scored}
+        else:
+            scored   = sorted(cid for cid in recs if cid in counts)
+            truth_resp = {cid: counts[cid] > 0 for cid in scored}
+            truth_bde  = {cid: counts[cid] > a.bde_threshold for cid in scored}
+            human      = {cid: counts[cid] for cid in scored}
+
+        reviewed_not_scanned = sum(1 for cid in counts if cid not in recs)
+        overlap    = sum(1 for cid in counts if cid in recs)
+        match_rate = pct(overlap, len(counts))
+        if len(counts) and match_rate < 0.5:
+            print("\n" + "!" * 74)
+            print(f"!! ID MATCH RATE IS ONLY {match_rate:.1%}")
+            print("!! Check: --id-col, and that Control IDs match file_name minus extension.")
+            print("!" * 74)
+
+        print(f"\nscored population   : {len(scored):,}")
+        print(f"  truly responsive  : {sum(truth_resp.values()):,}"
+              f"  ({pct(sum(truth_resp.values()), len(scored)):.1%})")
+        print(f"  truly BDE (> {a.bde_threshold}) : {sum(truth_bde.values()):,}")
+        print(f"  in export, not run: {reviewed_not_scanned:,}")
+        if mode == "unreviewed":
+            print(f"  in run, unreviewed: {len(recs) - len(scored):,}")
     else:
-        mode = a.absent_means
-        print(f"\nabsent-means: {mode} (explicit)")
-
-    if mode == "zero":
-        scored   = sorted(recs)
-        truth_resp = {cid: counts.get(cid, 0) > 0 for cid in scored}
-        truth_bde  = {cid: counts.get(cid, 0) > a.bde_threshold for cid in scored}
-        human      = {cid: counts.get(cid, 0) for cid in scored}
-    else:
-        scored   = sorted(cid for cid in recs if cid in counts)
-        truth_resp = {cid: counts[cid] > 0 for cid in scored}
-        truth_bde  = {cid: counts[cid] > a.bde_threshold for cid in scored}
-        human      = {cid: counts[cid] for cid in scored}
-
-    reviewed_not_scanned = sum(1 for cid in counts if cid not in recs)
-    overlap    = sum(1 for cid in counts if cid in recs)
-    match_rate = pct(overlap, len(counts))
-    if len(counts) and match_rate < 0.5:
-        print("\n" + "!" * 74)
-        print(f"!! ID MATCH RATE IS ONLY {match_rate:.1%}")
-        print("!! Check: --id-col, and that Control IDs match file_name minus extension.")
-        print("!" * 74)
-
-    print(f"\nscored population   : {len(scored):,}")
-    print(f"  truly responsive  : {sum(truth_resp.values()):,}"
-          f"  ({pct(sum(truth_resp.values()), len(scored)):.1%})")
-    print(f"  truly BDE (> {a.bde_threshold}) : {sum(truth_bde.values()):,}")
-    print(f"  in export, not run: {reviewed_not_scanned:,}")
-    if mode == "unreviewed":
-        print(f"  in run, unreviewed: {len(recs) - len(scored):,}")
+        mode = "no_truth"
+        scored     = sorted(recs)
+        truth_resp = {}
+        truth_bde  = {}
+        human      = {}
+        reviewed_not_scanned = 0
+        match_rate = 0.0
+        print(f"\nfiles in inventory  : {len(scored):,}  "
+              f"(no ground truth -- accuracy sections skipped)")
 
     # =============================== 1. COST =================================
     di_calls = sum(r["di"]        for r in recs.values())
@@ -2079,65 +2120,70 @@ def main():
     print(f"    saved {pct(dup_di, di_calls + dup_di):.1%} of total DI calls")
 
     # ============================= 2. NR / R =================================
-    s1 = stats(confusion(scored, recs, truth_resp, stage1_call))
-    print_rnr("STAGE 1 (Anna's) -- all scored files", s1,
-              "population: all scored files")
-    nr_results = {"Stage 1 (all scored)": s1}
-    nr_pops    = {"Stage 1 (all scored)":
-                  "all scored files — the number your tracker uses"}
-    s2_pop = []
-    if stage2_present:
-        s2_pop = [cid for cid in scored if recs[cid]["s2_ran"]]
-        s2 = stats(confusion(s2_pop, recs, truth_resp, stage2_call))
-        print_rnr("STAGE 2 (Daniel's) -- graded files only", s2,
-                  f"population: {len(s2_pop):,} files stage 2 graded")
-        nr_results["Stage 2 (graded)"] = s2
-        _s2_undet_note = (f"; {s2['undetermined']:,} undetermined → N = {s2['N']:,}"
-                          if s2["undetermined"] else "")
-        nr_pops["Stage 2 (graded)"] = (
-            f"{len(s2_pop):,} files stage 2 actually graded{_s2_undet_note}"
-        )
+    nr_results, nr_pops = {}, {}
+    s2_pop = [cid for cid in scored if recs[cid]["s2_ran"]] if stage2_present else []
+    if has_truth:
+        s1 = stats(confusion(scored, recs, truth_resp, stage1_call))
+        print_rnr("STAGE 1 (Anna's) -- all scored files", s1,
+                  "population: all scored files")
+        nr_results = {"Stage 1 (all scored)": s1}
+        nr_pops    = {"Stage 1 (all scored)":
+                      "all scored files — the number your tracker uses"}
+        if stage2_present:
+            s2 = stats(confusion(s2_pop, recs, truth_resp, stage2_call))
+            print_rnr("STAGE 2 (Daniel's) -- graded files only", s2,
+                      f"population: {len(s2_pop):,} files stage 2 graded")
+            nr_results["Stage 2 (graded)"] = s2
+            _s2_undet_note = (f"; {s2['undetermined']:,} undetermined → N = {s2['N']:,}"
+                              if s2["undetermined"] else "")
+            nr_pops["Stage 2 (graded)"] = (
+                f"{len(s2_pop):,} files stage 2 actually graded{_s2_undet_note}"
+            )
 
-        s1s = stats(confusion(s2_pop, recs, truth_resp, stage1_call))
-        print_rnr("STAGE 1 (restricted to stage 2's population)", s1s,
-                  "apples-to-apples with the row above")
-        nr_results["Stage 1 (S2 population)"] = s1s
-        # Stage 1 may be undetermined for files in non-standard lanes (e.g.
-        # nonsearchable_sample, review_error) that Stage 2 still graded — those
-        # files are excluded from N, which is why N here can be < Stage 2 N.
-        _s1s_undet_note = (f"; {s1s['undetermined']:,} have non-standard S1 lanes "
-                           f"(undetermined) → N = {s1s['N']:,}"
-                           if s1s["undetermined"] else "")
-        nr_pops["Stage 1 (S2 population)"] = (
-            f"same {len(s2_pop):,} files stage 2 graded{_s1s_undet_note} "
-            f"— compare with Stage 2 row above"
-        )
+            s1s = stats(confusion(s2_pop, recs, truth_resp, stage1_call))
+            print_rnr("STAGE 1 (restricted to stage 2's population)", s1s,
+                      "apples-to-apples with the row above")
+            nr_results["Stage 1 (S2 population)"] = s1s
+            # Stage 1 may be undetermined for files in non-standard lanes (e.g.
+            # nonsearchable_sample, review_error) that Stage 2 still graded — those
+            # files are excluded from N, which is why N here can be < Stage 2 N.
+            _s1s_undet_note = (f"; {s1s['undetermined']:,} have non-standard S1 lanes "
+                               f"(undetermined) → N = {s1s['N']:,}"
+                               if s1s["undetermined"] else "")
+            nr_pops["Stage 1 (S2 population)"] = (
+                f"same {len(s2_pop):,} files stage 2 graded{_s1s_undet_note} "
+                f"— compare with Stage 2 row above"
+            )
 
-        pipe = stats(confusion(scored, recs, truth_resp, pipeline_call))
-        print_rnr("PIPELINE (sequential — what a reviewer receives)", pipe)
-        nr_results["Pipeline"] = pipe
-        nr_pops["Pipeline"]    = \
-            "all scored: S1 clears→gone; else S2's call; if S2 N/A, S1 stands"
+            pipe = stats(confusion(scored, recs, truth_resp, pipeline_call))
+            print_rnr("PIPELINE (sequential — what a reviewer receives)", pipe)
+            nr_results["Pipeline"] = pipe
+            nr_pops["Pipeline"]    = \
+                "all scored: S1 clears→gone; else S2's call; if S2 N/A, S1 stands"
 
-        uni = stats(confusion(scored, recs, truth_resp, union_call))
-        print_rnr("UNION (either stage says responsive)", uni)
-        nr_results["Union"] = uni
-        nr_pops["Union"]    = "recall ceiling — not the workflow, shows gating cost"
+            uni = stats(confusion(scored, recs, truth_resp, union_call))
+            print_rnr("UNION (either stage says responsive)", uni)
+            nr_results["Union"] = uni
+            nr_pops["Union"]    = "recall ceiling — not the workflow, shows gating cost"
 
-        print("\n  stage-2 level distribution:")
-        for lvl, n in Counter(recs[c]["s2_level"] or "(none)"
-                               for c in s2_pop).most_common():
-            tr = sum(1 for c in s2_pop
-                     if recs[c]["s2_level"] == lvl and truth_resp[c])
-            print(f"    {lvl:12s} {n:7,}   truly resp {tr:,} ({pct(tr, n):.1%})")
-        print("\n  stage-2 skip reasons:")
-        for k, n in Counter(recs[c]["s2_skip"] or "(none)"
-                             for c in scored if not recs[c]["s2_ran"]).most_common():
-            print(f"    {k:20s} {n:7,}")
+            print("\n  stage-2 level distribution:")
+            for lvl, n in Counter(recs[c]["s2_level"] or "(none)"
+                                   for c in s2_pop).most_common():
+                tr = sum(1 for c in s2_pop
+                         if recs[c]["s2_level"] == lvl and truth_resp[c])
+                print(f"    {lvl:12s} {n:7,}   truly resp {tr:,} ({pct(tr, n):.1%})")
+            print("\n  stage-2 skip reasons:")
+            for k, n in Counter(recs[c]["s2_skip"] or "(none)"
+                                 for c in scored if not recs[c]["s2_ran"]).most_common():
+                print(f"    {k:20s} {n:7,}")
+    else:
+        print("\n" + "=" * 74)
+        print("2. NR/R ACCURACY -- skipped (no --entities ground truth provided)")
+        print("=" * 74)
 
-    # optional manual cross-check
+    # optional manual cross-check (needs entities ground truth to compare against)
     xcheck = {}
-    if a.manual:
+    if a.manual and has_truth:
         man, unrec = load_manual_status(a.manual, a.manual_sheet,
                                         a.id_col, a.status_col)
         common = [cid for cid in scored if cid in man]
@@ -2154,82 +2200,103 @@ def main():
                 for c in common if (man[c] == "resp") != truth_resp[c]
             ).most_common() if agree < len(common) else [],
         }
+    elif a.manual and not has_truth:
+        print("\n  manual cross-check skipped -- requires --entities as ground truth")
 
     # =============================== 3. BDE =================================
-    print("\n" + "=" * 74)
-    print(f"3. BDE ACCURACY   (truth: Total Entities > {a.bde_threshold})")
-    print("=" * 74)
-    bde_defs = {
-        "is_bde flag (column)":
-            lambda x: x["is_bde"],
-        "BDE lane (bde / structured_bde)":
-            lambda x: x["lane"] in BDE_LANES,
-        f"effective count > {a.bde_threshold}":
-            lambda x: x["eff"] > a.bde_threshold,
-        f"lane OR bde_person_count > {a.bde_threshold} (incl. recovery)":
-            lambda x: x["lane"] in BDE_LANES or x["bpc"] > a.bde_threshold,
-    }
-    if stage2_present:
-        bde_defs["stage 2 s2_is_bde"] = lambda x: x["s2_is_bde"]
-
     bde_results = {}
-    for label, pred in bde_defs.items():
-        c = confusion(scored, recs, truth_bde, lambda x, p=pred: p(x))
-        st = stats(c)
-        bde_results[label] = (st, c)
-        print_bde(label, st)
-
-    # BDE count accuracy
-    true_bde_ids = [cid for cid in scored if truth_bde[cid]]
     count_acc = None
-    if true_bde_ids:
-        thr1   = a.bde_threshold + 1
-        raw_ge = sum(1 for c in true_bde_ids if recs[c]["est"] >= thr1)
-        eff_ge = sum(1 for c in true_bde_ids if recs[c]["eff"] >= thr1)
-        err    = sorted(abs(recs[c]["eff"] - human[c]) for c in true_bde_ids)
-        under  = [c for c in true_bde_ids if recs[c]["eff"] < thr1]
-        rescued = eff_ge - raw_ge
-        print(f"\n  COUNT ACCURACY on {len(true_bde_ids):,} true BDEs")
-        print(f"    raw est >= {thr1}: {raw_ge:,}  ({pct(raw_ge, len(true_bde_ids)):.1%})")
-        print(f"    effective >= {thr1}: {eff_ge:,}  ({pct(eff_ge, len(true_bde_ids)):.1%})")
-        print(f"    rescued by bde_person_count: {rescued:,}")
-        print(f"    still missed: {len(under):,}  ({pct(len(under), len(true_bde_ids)):.1%})")
-        print(f"    mean |tool-human|: {sum(err)/len(err):,.1f}"
-              f"    median: {err[len(err)//2]:,}")
-        count_acc = {
-            "n_true_bde":       len(true_bde_ids),
-            "threshold":        thr1,
-            "raw_ge":           raw_ge,
-            "eff_ge":           eff_ge,
-            "rescued":          rescued,
-            "still_missed":     len(under),
-            "mean_err":         sum(err) / len(err),
-            "median_err":       err[len(err) // 2],
-            "under_by_type":    Counter(recs[c]["type"] for c in under),
-            "under_by_searchable": Counter(
-                "searchable" if recs[c]["searchable"] else "non-searchable"
-                for c in under),
+    if has_truth:
+        print("\n" + "=" * 74)
+        print(f"3. BDE ACCURACY   (truth: Total Entities > {a.bde_threshold})")
+        print("=" * 74)
+        bde_defs = {
+            "is_bde flag (column)":
+                lambda x: x["is_bde"],
+            "BDE lane (bde / structured_bde)":
+                lambda x: x["lane"] in BDE_LANES,
+            f"effective count > {a.bde_threshold}":
+                lambda x: x["eff"] > a.bde_threshold,
+            f"lane OR bde_person_count > {a.bde_threshold} (incl. recovery)":
+                lambda x: x["lane"] in BDE_LANES or x["bpc"] > a.bde_threshold,
         }
+        if stage2_present:
+            bde_defs["stage 2 s2_is_bde"] = lambda x: x["s2_is_bde"]
+
+        for label, pred in bde_defs.items():
+            c = confusion(scored, recs, truth_bde, lambda x, p=pred: p(x))
+            st = stats(c)
+            bde_results[label] = (st, c)
+            print_bde(label, st)
+
+        # BDE count accuracy
+        true_bde_ids = [cid for cid in scored if truth_bde[cid]]
+        if true_bde_ids:
+            thr1   = a.bde_threshold + 1
+            raw_ge = sum(1 for c in true_bde_ids if recs[c]["est"] >= thr1)
+            eff_ge = sum(1 for c in true_bde_ids if recs[c]["eff"] >= thr1)
+            err    = sorted(abs(recs[c]["eff"] - human[c]) for c in true_bde_ids)
+            under  = [c for c in true_bde_ids if recs[c]["eff"] < thr1]
+            rescued = eff_ge - raw_ge
+            print(f"\n  COUNT ACCURACY on {len(true_bde_ids):,} true BDEs")
+            print(f"    raw est >= {thr1}: {raw_ge:,}  ({pct(raw_ge, len(true_bde_ids)):.1%})")
+            print(f"    effective >= {thr1}: {eff_ge:,}  ({pct(eff_ge, len(true_bde_ids)):.1%})")
+            print(f"    rescued by bde_person_count: {rescued:,}")
+            print(f"    still missed: {len(under):,}  ({pct(len(under), len(true_bde_ids)):.1%})")
+            print(f"    mean |tool-human|: {sum(err)/len(err):,.1f}"
+                  f"    median: {err[len(err)//2]:,}")
+            count_acc = {
+                "n_true_bde":       len(true_bde_ids),
+                "threshold":        thr1,
+                "raw_ge":           raw_ge,
+                "eff_ge":           eff_ge,
+                "rescued":          rescued,
+                "still_missed":     len(under),
+                "mean_err":         sum(err) / len(err),
+                "median_err":       err[len(err) // 2],
+                "under_by_type":    Counter(recs[c]["type"] for c in under),
+                "under_by_searchable": Counter(
+                    "searchable" if recs[c]["searchable"] else "non-searchable"
+                    for c in under),
+            }
+    else:
+        print("\n" + "=" * 74)
+        print("3. BDE ACCURACY -- skipped (no --entities ground truth provided)")
+        print("=" * 74)
 
     # =============================== 4. BREAKDOWNS ==========================
-    print("\n" + "=" * 74)
-    print("4. BY FILE TYPE (stage 1 R/NR)")
-    print("=" * 74)
-    hdr = (f"{'TYPE':<14}{'n':>7}{'TP':>7}{'FP':>7}{'FN':>7}{'TN':>7}"
-           f"{'Rec':>8}{'Prec':>8}{'NRacc':>8}{'DIcalls':>9}{'tokens':>12}")
-    print(hdr)
-    print("-" * len(hdr))
     by = defaultdict(list)
     for cid in scored:
         by[recs[cid]["type"]].append(cid)
-    for t, ids in sorted(by.items(), key=lambda kv: -len(kv[1])):
-        st = stats(confusion(ids, recs, truth_resp, stage1_call))
-        print(f"{t:<14}{st['N']:>7,}{st['TP']:>7,}{st['FP']:>7,}"
-              f"{st['FN']:>7,}{st['TN']:>7,}"
-              f"{fmt(st['recall'],3):>8}{fmt(st['precision'],3):>8}"
-              f"{fmt(st['nr_accuracy'],3):>8}"
-              f"{sum(recs[c]['di'] for c in ids):>9,}"
-              f"{sum(recs[c]['tok1']+recs[c]['tok2'] for c in ids):>12,}")
+
+    if has_truth:
+        print("\n" + "=" * 74)
+        print("4. BY FILE TYPE (stage 1 R/NR)")
+        print("=" * 74)
+        hdr = (f"{'TYPE':<14}{'n':>7}{'TP':>7}{'FP':>7}{'FN':>7}{'TN':>7}"
+               f"{'Rec':>8}{'Prec':>8}{'NRacc':>8}{'DIcalls':>9}{'tokens':>12}")
+        print(hdr)
+        print("-" * len(hdr))
+        for t, ids in sorted(by.items(), key=lambda kv: -len(kv[1])):
+            st = stats(confusion(ids, recs, truth_resp, stage1_call))
+            print(f"{t:<14}{st['N']:>7,}{st['TP']:>7,}{st['FP']:>7,}"
+                  f"{st['FN']:>7,}{st['TN']:>7,}"
+                  f"{fmt(st['recall'],3):>8}{fmt(st['precision'],3):>8}"
+                  f"{fmt(st['nr_accuracy'],3):>8}"
+                  f"{sum(recs[c]['di'] for c in ids):>9,}"
+                  f"{sum(recs[c]['tok1']+recs[c]['tok2'] for c in ids):>12,}")
+    else:
+        print("\n" + "=" * 74)
+        print("4. BY FILE TYPE (lane distribution -- no ground truth for accuracy)")
+        print("=" * 74)
+        hdr = f"{'TYPE':<14}{'n':>7}{'flagged':>9}{'DIcalls':>9}{'tokens':>12}"
+        print(hdr)
+        print("-" * len(hdr))
+        for t, ids in sorted(by.items(), key=lambda kv: -len(kv[1])):
+            flagged = sum(1 for c in ids if stage1_call(recs[c]))
+            print(f"{t:<14}{len(ids):>7,}{flagged:>9,}"
+                  f"{sum(recs[c]['di'] for c in ids):>9,}"
+                  f"{sum(recs[c]['tok1']+recs[c]['tok2'] for c in ids):>12,}")
 
     # OCR yield
     ocr_yield = None
@@ -2245,8 +2312,8 @@ def main():
                 "di_pages_total": di_pages,
                 "di_calls_total": di_calls,
                 "flagged_resp":   sum(1 for c in got if not recs[c]["nr1"]),
-                "truly_resp":     sum(1 for c in got if truth_resp[c]),
-                "truly_bde":      sum(1 for c in got if truth_bde[c]),
+                "truly_resp":     sum(1 for c in got if truth_resp[c]) if has_truth else None,
+                "truly_bde":      sum(1 for c in got if truth_bde[c]) if has_truth else None,
                 "lanes":          Counter(recs[c]["lane"] for c in got),
             }
 
@@ -2267,39 +2334,49 @@ def main():
     for cid in scored:
         rec = recs[cid]
         s1  = stage1_call(rec)
-        tr  = truth_resp[cid]
-        tb  = truth_bde[cid]
         ftype = rec["type"]
         skey  = "searchable" if rec["searchable"] else "non-searchable"
         pkey  = "structured" if rec["programmatic"] else "non-structured"
 
         pc = pipeline_call(rec) if stage2_present else s1
 
-        calls_to_record = [("s1", s1)]
-        if stage2_present:
-            calls_to_record.append(("s2", stage2_call(rec)))
-            calls_to_record.append(("pipe", pc))
+        if has_truth:
+            tr = truth_resp[cid]
+            tb = truth_bde[cid]
 
-        for bk, call in calls_to_record:
-            if call is None:
-                continue
-            if   tr and call:       idx = 0
-            elif call and not tr:   idx = 1
-            elif tr and not call:   idx = 2
-            else:                   idx = 3
-            b = mbt[bk]
-            b["overall"][idx]                     += 1
-            b["ftype"][ftype][idx]                += 1
-            b["search"][skey][idx]                += 1
-            b["sftype"][skey][ftype][idx]         += 1
-            b["sp"][(skey, pkey)][idx]            += 1
-            b["spftype"][(skey, pkey)][ftype][idx]+= 1
-        if pc is None:
-            pcls = "Undetermined"
-        elif tr and pc:     pcls = "TP"
-        elif pc and not tr: pcls = "FP"
-        elif tr and not pc: pcls = "FN"
-        else:               pcls = "TN"
+            calls_to_record = [("s1", s1)]
+            if stage2_present:
+                calls_to_record.append(("s2", stage2_call(rec)))
+                calls_to_record.append(("pipe", pc))
+
+            for bk, call in calls_to_record:
+                if call is None:
+                    continue
+                if   tr and call:       idx = 0
+                elif call and not tr:   idx = 1
+                elif tr and not call:   idx = 2
+                else:                   idx = 3
+                b = mbt[bk]
+                b["overall"][idx]                     += 1
+                b["ftype"][ftype][idx]                += 1
+                b["search"][skey][idx]                += 1
+                b["sftype"][skey][ftype][idx]         += 1
+                b["sp"][(skey, pkey)][idx]            += 1
+                b["spftype"][(skey, pkey)][ftype][idx]+= 1
+            if pc is None:
+                pcls = "Undetermined"
+            elif tr and pc:     pcls = "TP"
+            elif pc and not tr: pcls = "FP"
+            elif tr and not pc: pcls = "FN"
+            else:               pcls = "TN"
+        else:
+            tr = tb = None
+            if pc is None:
+                pcls = "Undetermined"
+            elif pc:
+                pcls = "Flagged"
+            else:
+                pcls = "Not Flagged"
 
         file_detail_rows.append({
             "cid":        cid,
@@ -2340,7 +2417,7 @@ def main():
 
     # Stage 2 detail
     s2_detail = None
-    if stage2_present and s2_pop:
+    if has_truth and stage2_present and s2_pop:
         levels = []
         for lvl, n in Counter(recs[c]["s2_level"] or "(none)"
                                for c in s2_pop).most_common():
@@ -2354,31 +2431,32 @@ def main():
                                for c in scored if not recs[c]["s2_ran"]),
         }
 
-    # Miss rows
-    c1 = confusion(scored, recs, truth_resp, stage1_call)
-    bde_key = f"lane OR bde_person_count > {a.bde_threshold} (incl. recovery)"
-    _, cb = bde_results[bde_key]
-
-    miss_groups = [("stage1_FN", c1["fns"]), ("stage1_FP", c1["fps"])]
-    if stage2_present:
-        cp = confusion(scored, recs, truth_resp, pipeline_call)
-        miss_groups.append(("pipeline_FN", cp["fns"]))
-    miss_groups += [("bde_FN", cb["fns"]), ("bde_FP", cb["fps"])]
-
+    # Miss rows (need ground truth to know what was missed)
     miss_rows = []
-    for which, cids in miss_groups:
-        for cid in sorted(cids, key=lambda c: -human.get(c, 0)):
-            rec = recs[cid]
-            miss_rows.append({
-                "which":     which,    "cid":       cid,
-                "name":      rec["name"], "human_ent": human.get(cid, ""),
-                "type":      rec["type"], "lane":      rec["lane"],
-                "s2_lane":   rec["s2_lane"], "s2_level":  rec["s2_level"],
-                "tool_est":  rec["est"], "bpc":       rec["bpc"],
-                "eff":       rec["eff"],
-                "searchable": rec["searchable"], "is_struct": rec["is_struct"],
-                "di":        rec["di"], "detail":     rec["detail"],
-            })
+    if has_truth:
+        c1 = confusion(scored, recs, truth_resp, stage1_call)
+        bde_key = f"lane OR bde_person_count > {a.bde_threshold} (incl. recovery)"
+        _, cb = bde_results[bde_key]
+
+        miss_groups = [("stage1_FN", c1["fns"]), ("stage1_FP", c1["fps"])]
+        if stage2_present:
+            cp = confusion(scored, recs, truth_resp, pipeline_call)
+            miss_groups.append(("pipeline_FN", cp["fns"]))
+        miss_groups += [("bde_FN", cb["fns"]), ("bde_FP", cb["fps"])]
+
+        for which, cids in miss_groups:
+            for cid in sorted(cids, key=lambda c: -human.get(c, 0)):
+                rec = recs[cid]
+                miss_rows.append({
+                    "which":     which,    "cid":       cid,
+                    "name":      rec["name"], "human_ent": human.get(cid, ""),
+                    "type":      rec["type"], "lane":      rec["lane"],
+                    "s2_lane":   rec["s2_lane"], "s2_level":  rec["s2_level"],
+                    "tool_est":  rec["est"], "bpc":       rec["bpc"],
+                    "eff":       rec["eff"],
+                    "searchable": rec["searchable"], "is_struct": rec["is_struct"],
+                    "di":        rec["di"], "detail":     rec["detail"],
+                })
 
     # ==================== try scaling data (local snapshot only) ============
     # Independent script: never calls out to scaling-lib/Azure. Timing data
@@ -2404,7 +2482,7 @@ def main():
     report = {
         # run info
         "inventory_path":    a.inventory,
-        "entities_path":     a.entities,
+        "entities_path":     a.entities or "(not provided)",
         "manual_path":       a.manual,
         "generated":         datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
         "pipeline_desc":     ("stage 1 + stage 2" if stage2_present
@@ -2412,11 +2490,12 @@ def main():
         "mode":              mode,
         "absent_auto":       a.absent_means == "auto",
         "bde_threshold":     a.bde_threshold,
+        "has_truth":         has_truth,
         # population
         "n_inventory":       len(recs),
         "n_scored":          len(scored),
-        "n_responsive":      sum(truth_resp.values()),
-        "n_bde":             sum(truth_bde.values()),
+        "n_responsive":      sum(truth_resp.values()) if has_truth else "n/a",
+        "n_bde":             sum(truth_bde.values()) if has_truth else "n/a",
         "reviewed_not_scanned": reviewed_not_scanned,
         "n_not_reviewed":    len(recs) - len(scored) if mode == "unreviewed" else 0,
         "match_rate":        match_rate,
