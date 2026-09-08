@@ -1971,12 +1971,53 @@ def write_scorecard_xlsx(rp, scaling, out_path):
     print(f"\nwrote: {out_path}")
 
 
+# --------------------------------------------------------------- GUI file pickers --
+def _pick_paths_via_gui(need_inventory, need_out_dir):
+    """Native file/folder dialogs for whichever paths weren't given on the command line.
+
+    Returns (inventory_path_or_None, out_dir_or_None) -- either comes back None if
+    tkinter isn't available or the user cancels, and the caller falls back to the
+    CLI defaults.
+    """
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+    except ImportError:
+        print("tkinter not available -- pass --inventory/--out-dir explicitly.")
+        return None, None
+
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+
+    inv_path = None
+    if need_inventory:
+        inv_path = filedialog.askopenfilename(
+            parent=root,
+            title="Select inventory.csv (source)",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+        )
+
+    out_dir = None
+    if need_out_dir:
+        out_dir = filedialog.askdirectory(
+            parent=root,
+            title="Select output folder (destination) for the scorecard",
+        )
+
+    root.destroy()
+    return inv_path or None, out_dir or None
+
+
 # ======================================================================= main ==
 def main():
     ap = argparse.ArgumentParser(
         description="One scorecard for a combined-run inventory: cost, NR/R, BDE.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    ap.add_argument("--inventory", default=DEFAULT_INVENTORY)
+    ap.add_argument("--inventory", default=None,
+                    help=f"Inventory CSV to score. If omitted, a file-picker dialog "
+                         f"opens (tkinter); falls back to '{DEFAULT_INVENTORY}' if "
+                         f"cancelled or --no-gui is set.")
     ap.add_argument("--entities", default=None,
                     help="CNG entities export (.csv/.xlsx) with Control ID + Total Entities. "
                          "Optional -- if omitted, all ground-truth accuracy sections "
@@ -1998,8 +2039,22 @@ def main():
     ap.add_argument("--timing", default=None,
                     help="Path to a _timing.json snapshot from collect_outputs.py. "
                          "Auto-detected as <inventory_stem>_timing.json if not provided.")
-    ap.add_argument("--out-dir", default=".")
+    ap.add_argument("--out-dir", default=None,
+                    help="Folder to write the scorecard into. If omitted, a "
+                         "folder-picker dialog opens (tkinter); falls back to the "
+                         "current directory if cancelled or --no-gui is set.")
+    ap.add_argument("--no-gui", action="store_true",
+                    help="Never open tkinter dialogs; use CLI defaults for any "
+                         "omitted --inventory/--out-dir.")
     a = ap.parse_args()
+
+    if not a.no_gui and (a.inventory is None or a.out_dir is None):
+        gui_inv, gui_out = _pick_paths_via_gui(
+            need_inventory=a.inventory is None, need_out_dir=a.out_dir is None)
+        a.inventory = a.inventory or gui_inv
+        a.out_dir   = a.out_dir or gui_out
+    a.inventory = a.inventory or DEFAULT_INVENTORY
+    a.out_dir   = a.out_dir or "."
 
     paths_to_check = [a.inventory] + ([a.entities] if a.entities else [])
     for p in paths_to_check:
